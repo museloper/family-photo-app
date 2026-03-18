@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useState } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -16,7 +17,20 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/theme";
 import { Album, MemberRole, useAlbums } from "@/contexts/AlbumContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import {
+  ApiAlbum, ApiError, ApiMember,
+  createAlbum, deleteAlbumApi, getAlbums, getMembers,
+  removeMember, updateAlbumApi, updateMemberRoleApi,
+} from "@/services/api";
+
+const MEMBER_AVATAR_COLORS = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA', '#00CEC9'];
+function memberAvatarColor(name: string): string {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return MEMBER_AVATAR_COLORS[Math.abs(h) % MEMBER_AVATAR_COLORS.length];
+}
 
 function daysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate();
@@ -346,43 +360,97 @@ export default function SettingsScreen() {
   const colors = Colors[colorScheme ?? "light"];
   const isDark = colorScheme === "dark";
 
-  const { albums, selectedAlbumId, selectedAlbum, setSelectedAlbumId, addAlbum, updateAlbum, deleteAlbum, inviteMember, removeMember, updateMemberRole, addNotification } = useAlbums();
+  const { session, clearSession, switchAlbum } = useAuth();
+  const { addNotification } = useAlbums();
 
+  // ─── 앨범 목록 (API) ─────────────────────────────────────────────────────────
+  const [apiAlbums, setApiAlbums] = useState<ApiAlbum[]>([]);
+  const [editingApiAlbum, setEditingApiAlbum] = useState<ApiAlbum | null>(null);
   const [albumFormVisible, setAlbumFormVisible] = useState(false);
-  const [editingAlbum, setEditingAlbum] = useState<Album | null>(null);
   const [inviteVisible, setInviteVisible] = useState(false);
 
+  const fetchAlbums = useCallback(async () => {
+    if (!session) return;
+    try {
+      const albums = await getAlbums(session.token);
+      setApiAlbums(albums);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) clearSession();
+    }
+  }, [session]);
+
+  // ─── 멤버 목록 (API) ─────────────────────────────────────────────────────────
+  const [apiMembers, setApiMembers] = useState<ApiMember[]>([]);
+
+  const fetchMembers = useCallback(() => {
+    if (!session) return;
+    getMembers(session.albumId, session.token)
+      .then(setApiMembers)
+      .catch(() => {});
+  }, [session]);
+
+  useFocusEffect(useCallback(() => {
+    fetchAlbums();
+    fetchMembers();
+  }, [fetchAlbums, fetchMembers]));
+
   // Role change confirmation
-  type PendingRoleChange = { memberId: string; memberName: string; newRole: MemberRole };
+  type PendingRoleChange = { memberId: number; memberName: string; newRole: MemberRole };
   const [pendingRoleChange, setPendingRoleChange] = useState<PendingRoleChange | null>(null);
 
-  // Which album's members are being managed (defaults to selectedAlbum)
-  const [memberAlbumId, setMemberAlbumId] = useState(selectedAlbumId);
-  const memberAlbum = albums.find((a) => a.id === memberAlbumId) ?? selectedAlbum;
+  // ApiAlbum → AlbumFormModal용 Album 타입 변환 (birth_date는 ISO string으로 옴)
+  function apiAlbumToForm(a: ApiAlbum): Album {
+    // birth_date는 'YYYY-MM-DD' 형식으로 옴 (timezone 이슈 방지를 위해 직접 파싱)
+    const [year, month, day] = a.birth_date.slice(0, 10).split('-').map(Number);
+    return {
+      id: String(a.id), albumName: a.name, babyName: a.baby_name, color: a.color, members: [],
+      birthYear: year, birthMonth: month, birthDay: day,
+    };
+  }
 
-  const openAddAlbum = () => { setEditingAlbum(null); setAlbumFormVisible(true); };
-  const openEditAlbum = (album: Album) => { setEditingAlbum(album); setAlbumFormVisible(true); };
+  const openAddAlbum = () => { setEditingApiAlbum(null); setAlbumFormVisible(true); };
+  const openEditAlbum = (a: ApiAlbum) => { setEditingApiAlbum(a); setAlbumFormVisible(true); };
 
-  const handleAlbumSave = (data: { babyName: string; albumName: string; birthYear: number; birthMonth: number; birthDay: number }) => {
-    if (editingAlbum) {
-      updateAlbum(editingAlbum.id, data);
-    } else {
-      addAlbum({ ...data, color: ALBUM_COLORS[albums.length % ALBUM_COLORS.length] });
+  const handleAlbumSave = async (data: { babyName: string; albumName: string; birthYear: number; birthMonth: number; birthDay: number }) => {
+    if (!session) return;
+    const birthDate = `${data.birthYear}-${String(data.birthMonth).padStart(2, '0')}-${String(data.birthDay).padStart(2, '0')}`;
+    try {
+      if (editingApiAlbum) {
+        await updateAlbumApi(editingApiAlbum.id, session.token, { name: data.albumName || `${data.babyName}의 앨범`, babyName: data.babyName, birthDate });
+      } else {
+        await createAlbum(session.token, { name: data.albumName || `${data.babyName}의 앨범`, babyName: data.babyName, birthDate, color: ALBUM_COLORS[apiAlbums.length % ALBUM_COLORS.length] });
+      }
+      await fetchAlbums();
+      setAlbumFormVisible(false);
+    } catch (e) {
+      Alert.alert("오류", e instanceof Error ? e.message : "저장에 실패했습니다");
     }
-    setAlbumFormVisible(false);
   };
 
-  const handleDeleteAlbum = (albumId: string) => {
+  const handleDeleteAlbum = (albumId: number) => {
+    if (!session) return;
     Alert.alert("앨범 삭제", "이 앨범을 삭제하시겠어요?", [
       { text: "취소", style: "cancel" },
-      { text: "삭제", style: "destructive", onPress: () => deleteAlbum(albumId) },
+      { text: "삭제", style: "destructive", onPress: () =>
+        deleteAlbumApi(albumId, session.token)
+          .then(fetchAlbums)
+          .catch((e) => Alert.alert("오류", e instanceof Error ? e.message : "삭제에 실패했습니다")),
+      },
     ]);
   };
 
-  const handleRemoveMember = (memberId: string, name: string) => {
+  const handleRemoveMember = (memberId: number, name: string) => {
+    if (!session) return;
     Alert.alert("멤버 삭제", `${name}님을 앨범에서 제거할까요?`, [
       { text: "취소", style: "cancel" },
-      { text: "제거", style: "destructive", onPress: () => removeMember(memberAlbum.id, memberId) },
+      {
+        text: "제거", style: "destructive",
+        onPress: () => {
+          removeMember(session.albumId, memberId, session.token)
+            .then(fetchMembers)
+            .catch((e) => Alert.alert("오류", e instanceof Error ? e.message : "제거에 실패했습니다"));
+        },
+      },
     ]);
   };
 
@@ -398,43 +466,56 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.subtext }]}>앨범</Text>
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {albums.map((album, idx) => (
-              <React.Fragment key={album.id}>
-                <TouchableOpacity
-                  style={[styles.albumRow, selectedAlbumId === album.id && styles.albumRowActive]}
-                  onPress={() => setSelectedAlbumId(album.id)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.albumAvatar, { backgroundColor: album.color }]}>
-                    <Text style={styles.albumAvatarInitial}>{album.babyName[0]}</Text>
-                  </View>
-                  <View style={styles.albumInfo}>
-                    <View style={styles.albumNameRow}>
-                      <Text style={[styles.albumName, { color: colors.text }]}>{album.albumName}</Text>
-                      {selectedAlbumId === album.id && (
-                        <View style={[styles.activeBadge, { backgroundColor: colors.tint }]}>
-                          <Text style={styles.activeBadgeText}>현재</Text>
-                        </View>
-                      )}
+            {apiAlbums.length === 0 ? (
+              <View style={styles.albumRow}>
+                <Text style={[styles.albumName, { color: colors.subtext }]}>앨범을 불러오는 중...</Text>
+              </View>
+            ) : apiAlbums.map((album, idx) => {
+              const [y, m, d] = album.birth_date.slice(0, 10).split('-').map(Number);
+              const isCurrent = album.id === session?.albumId;
+              return (
+                <React.Fragment key={album.id}>
+                  <View style={styles.albumRow}>
+                    <View style={[styles.albumAvatar, { backgroundColor: album.color }]}>
+                      <Text style={styles.albumAvatarInitial}>{album.baby_name[0]}</Text>
                     </View>
-                    <Text style={[styles.albumMeta, { color: colors.subtext }]}>
-                      {album.babyName} · {album.birthYear}년 {album.birthMonth}월 {album.birthDay}일생
-                    </Text>
-                  </View>
-                  <TouchableOpacity style={styles.iconBtn} onPress={() => openEditAlbum(album)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Ionicons name="pencil-outline" size={17} color={colors.subtext} />
-                  </TouchableOpacity>
-                  {albums.length > 1 && (
-                    <TouchableOpacity style={styles.iconBtn} onPress={() => handleDeleteAlbum(album.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Ionicons name="trash-outline" size={17} color="#FF3B30" />
+                    <View style={styles.albumInfo}>
+                      <View style={styles.albumNameRow}>
+                        <Text style={[styles.albumName, { color: colors.text }]}>{album.name}</Text>
+                        {isCurrent && (
+                          <View style={[styles.activeBadge, { backgroundColor: colors.tint }]}>
+                            <Text style={styles.activeBadgeText}>현재</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[styles.albumMeta, { color: colors.subtext }]}>
+                        {album.baby_name} · {y}년 {m}월 {d}일생
+                      </Text>
+                    </View>
+                    {!isCurrent && (
+                      <TouchableOpacity
+                        style={[styles.switchBtn, { borderColor: colors.tint }]}
+                        onPress={() => switchAlbum(album.id, album.baby_name, album.birth_date)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Text style={[styles.switchBtnText, { color: colors.tint }]}>선택</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity style={styles.iconBtn} onPress={() => openEditAlbum(album)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Ionicons name="pencil-outline" size={17} color={colors.subtext} />
                     </TouchableOpacity>
+                    {apiAlbums.length > 1 && (
+                      <TouchableOpacity style={styles.iconBtn} onPress={() => handleDeleteAlbum(album.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="trash-outline" size={17} color="#FF3B30" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  {idx < apiAlbums.length - 1 && (
+                    <View style={[styles.rowDivider, { backgroundColor: colors.border, marginLeft: 72 }]} />
                   )}
-                </TouchableOpacity>
-                {idx < albums.length - 1 && (
-                  <View style={[styles.rowDivider, { backgroundColor: colors.border, marginLeft: 72 }]} />
-                )}
-              </React.Fragment>
-            ))}
+                </React.Fragment>
+              );
+            })}
           </View>
           <TouchableOpacity style={[styles.outlineButton, { borderColor: colors.tint }]} onPress={openAddAlbum} activeOpacity={0.75}>
             <Ionicons name="add-circle-outline" size={18} color={colors.tint} />
@@ -442,81 +523,68 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ── Members (per album) ── */}
+        {/* ── Members ── */}
         <View style={styles.section}>
-          {/* Section header with album switcher */}
           <View style={styles.memberSectionHeader}>
             <Text style={[styles.sectionTitle, { color: colors.subtext, marginBottom: 0 }]}>함께하는 멤버</Text>
-            {albums.length > 1 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.memberAlbumTabs}>
-                {albums.map((a) => {
-                  const active = a.id === memberAlbumId;
-                  return (
-                    <TouchableOpacity
-                      key={a.id}
-                      onPress={() => setMemberAlbumId(a.id)}
-                      style={[styles.memberAlbumTab, active && { borderBottomColor: colors.tint, borderBottomWidth: 2 }]}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.memberAlbumTabText, { color: active ? colors.tint : colors.subtext }]}>
-                        {a.albumName}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            )}
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {memberAlbum.members.map((member, idx) => (
-              <React.Fragment key={member.id}>
-                <View style={styles.memberRow}>
-                  <View style={[styles.memberAvatar, { backgroundColor: member.avatarColor }]}>
-                    <Text style={styles.memberAvatarInitial}>{member.initial}</Text>
-                  </View>
-                  <View style={styles.memberInfo}>
-                    <View style={styles.memberNameRow}>
-                      <Text style={[styles.memberName, { color: colors.text }]}>{member.name}</Text>
-                      {member.isMe && (
-                        <View style={[styles.meBadge, { backgroundColor: isDark ? "#2A2A2A" : "#F0F0F0" }]}>
-                          <Text style={[styles.meBadgeText, { color: colors.subtext }]}>나</Text>
-                        </View>
+            {apiMembers.length === 0 ? (
+              <View style={styles.memberRow}>
+                <Text style={[styles.memberName, { color: colors.subtext }]}>멤버를 불러오는 중...</Text>
+              </View>
+            ) : apiMembers.map((member, idx) => {
+              const isMe = member.id === session?.userId;
+              const color = memberAvatarColor(member.name);
+              return (
+                <React.Fragment key={member.id}>
+                  <View style={styles.memberRow}>
+                    <View style={[styles.memberAvatar, { backgroundColor: color }]}>
+                      <Text style={styles.memberAvatarInitial}>{member.name.charAt(0)}</Text>
+                    </View>
+                    <View style={styles.memberInfo}>
+                      <View style={styles.memberNameRow}>
+                        <Text style={[styles.memberName, { color: colors.text }]}>{member.name}</Text>
+                        {isMe && (
+                          <View style={[styles.meBadge, { backgroundColor: isDark ? "#2A2A2A" : "#F0F0F0" }]}>
+                            <Text style={[styles.meBadgeText, { color: colors.subtext }]}>나</Text>
+                          </View>
+                        )}
+                      </View>
+                      {!member.is_creator ? (
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (isMe) return;
+                            const newRole: MemberRole = member.role === "admin" ? "member" : "admin";
+                            setPendingRoleChange({ memberId: member.id, memberName: member.name, newRole });
+                          }}
+                          disabled={isMe}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <View style={styles.roleChipRow}>
+                            <Text style={[styles.roleBadge, { color: member.role === "admin" ? colors.tint : colors.subtext }]}>
+                              {member.role === "admin" ? "관리자" : "일반 멤버"}
+                            </Text>
+                            {!isMe && <Ionicons name="chevron-down" size={11} color={colors.subtext} />}
+                          </View>
+                        </TouchableOpacity>
+                      ) : (
+                        <Text style={[styles.roleBadge, { color: colors.tint }]}>관리자 (생성자)</Text>
                       )}
                     </View>
-                    {/* Role — tappable if I'm admin and it's not the creator */}
-                    {!member.isCreator ? (
-                      <TouchableOpacity
-                        onPress={() => {
-                          if (member.isMe) return;
-                          const newRole: MemberRole = member.role === "admin" ? "member" : "admin";
-                          setPendingRoleChange({ memberId: member.id, memberName: member.name, newRole });
-                        }}
-                        disabled={member.isMe}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <View style={styles.roleChipRow}>
-                          <Text style={[styles.roleBadge, { color: member.role === "admin" ? colors.tint : colors.subtext }]}>
-                            {member.role === "admin" ? "관리자" : "일반 멤버"}
-                          </Text>
-                          {!member.isMe && <Ionicons name="chevron-down" size={11} color={colors.subtext} />}
-                        </View>
+                    {!isMe && !member.is_creator && (
+                      <TouchableOpacity style={styles.iconBtn} onPress={() => handleRemoveMember(member.id, member.name)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="person-remove-outline" size={17} color="#FF3B30" />
                       </TouchableOpacity>
-                    ) : (
-                      <Text style={[styles.roleBadge, { color: colors.tint }]}>관리자 (생성자)</Text>
                     )}
                   </View>
-                  {!member.isMe && !member.isCreator && (
-                    <TouchableOpacity style={styles.iconBtn} onPress={() => handleRemoveMember(member.id, member.name)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Ionicons name="person-remove-outline" size={17} color="#FF3B30" />
-                    </TouchableOpacity>
+                  {idx < apiMembers.length - 1 && (
+                    <View style={[styles.rowDivider, { backgroundColor: colors.border, marginLeft: 68 }]} />
                   )}
-                </View>
-                {idx < memberAlbum.members.length - 1 && (
-                  <View style={[styles.rowDivider, { backgroundColor: colors.border, marginLeft: 68 }]} />
-                )}
-              </React.Fragment>
-            ))}
+                </React.Fragment>
+              );
+            })}
           </View>
 
           <TouchableOpacity style={[styles.outlineButton, { borderColor: colors.tint }]} onPress={() => setInviteVisible(true)} activeOpacity={0.75}>
@@ -529,7 +597,7 @@ export default function SettingsScreen() {
       {/* Album form modal */}
       <AlbumFormModal
         visible={albumFormVisible}
-        editing={editingAlbum}
+        editing={editingApiAlbum ? apiAlbumToForm(editingApiAlbum) : null}
         onClose={() => setAlbumFormVisible(false)}
         onSave={handleAlbumSave}
         colors={colors}
@@ -567,19 +635,23 @@ export default function SettingsScreen() {
                 style={styles.confirmBtn}
                 activeOpacity={0.7}
                 onPress={() => {
-                  if (!pendingRoleChange) return;
-                  updateMemberRole(memberAlbum.id, pendingRoleChange.memberId, pendingRoleChange.newRole);
-                  const me = memberAlbum.members.find((m) => m.isMe);
-                  addNotification({
-                    albumId: memberAlbum.id,
-                    type: "role_change",
-                    actorName: me?.name ?? "관리자",
-                    actorInitial: me?.initial ?? "관",
-                    actorAvatarColor: me?.avatarColor ?? "#FF6B8A",
-                    targetMemberName: pendingRoleChange.memberName,
-                    newRole: pendingRoleChange.newRole,
-                    timestamp: Date.now(),
-                  });
+                  if (!pendingRoleChange || !session) return;
+                  updateMemberRoleApi(session.albumId, pendingRoleChange.memberId, pendingRoleChange.newRole, session.token)
+                    .then(() => {
+                      const me = apiMembers.find((m) => m.id === session.userId);
+                      addNotification({
+                        albumId: String(session.albumId),
+                        type: "role_change",
+                        actorName: me?.name ?? session.nickname,
+                        actorInitial: (me?.name ?? session.nickname).charAt(0),
+                        actorAvatarColor: memberAvatarColor(me?.name ?? session.nickname),
+                        targetMemberName: pendingRoleChange.memberName,
+                        newRole: pendingRoleChange.newRole,
+                        timestamp: Date.now(),
+                      });
+                      fetchMembers();
+                    })
+                    .catch((e) => Alert.alert("오류", e instanceof Error ? e.message : "역할 변경에 실패했습니다"));
                   setPendingRoleChange(null);
                 }}
               >
@@ -593,9 +665,9 @@ export default function SettingsScreen() {
       {/* Invite modal */}
       <InviteModal
         visible={inviteVisible}
-        albumName={memberAlbum.albumName}
+        albumName={apiAlbums.find((a) => a.id === session?.albumId)?.name ?? '앨범'}
         onClose={() => setInviteVisible(false)}
-        onInvite={(name, role) => { inviteMember(memberAlbum.id, name, role); setInviteVisible(false); }}
+        onInvite={() => setInviteVisible(false)}
         colors={colors}
         isDark={isDark}
       />
@@ -628,6 +700,8 @@ const styles = StyleSheet.create({
   activeBadgeText: { color: "#fff", fontSize: 11, fontWeight: "600" },
   albumMeta: { fontSize: 13 },
   iconBtn: { padding: 4 },
+  switchBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, marginRight: 4 },
+  switchBtnText: { fontSize: 12, fontWeight: '600' },
 
   // Outline buttons
   outlineButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, borderWidth: 1.5, marginTop: 12 },

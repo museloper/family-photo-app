@@ -1,24 +1,23 @@
 import { Ionicons } from "@expo/vector-icons";
-import React from "react";
-import { SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { Colors } from "@/constants/theme";
-import { Notification, useAlbums } from "@/contexts/AlbumContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { ApiActivity, ApiMember, ApiError, getActivity, getMembers } from "@/services/api";
 
-const MEMBERS = [
-  { id: "1", name: "플라잉캣", initial: "플", color: "#FF6B8A", lastSeen: "방금 전", isOnline: true },
-  { id: "2", name: "크라잉넛", initial: "크", color: "#6B8AFF", lastSeen: "어제", isOnline: false },
-  { id: "3", name: "라이언", initial: "라", color: "#6BC97A", lastSeen: "3일 전", isOnline: false },
-];
+const AVATAR_COLORS = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA', '#00CEC9'];
 
-const STATIC_ACTIVITIES = [
-  { id: "s1", member: "플라잉캣", initial: "플", avatarColor: "#FF6B8A", count: 1, date: "어제", thumbnailColor: "#FFB3C6" },
-  { id: "s2", member: "크라잉넛", initial: "크", avatarColor: "#6B8AFF", count: 9, date: "5개월 전", thumbnailColor: "#B5D8F7" },
-];
+function avatarColor(name: string): string {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
 
-function timeAgo(timestamp: number): string {
-  const diff = Date.now() - timestamp;
+function timeAgo(isoString: string): string {
+  const diff = Date.now() - new Date(isoString).getTime();
   const secs = Math.floor(diff / 1000);
   if (secs < 60) return "방금 전";
   const mins = Math.floor(secs / 60);
@@ -26,103 +25,124 @@ function timeAgo(timestamp: number): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}시간 전`;
   const days = Math.floor(hours / 24);
-  return `${days}일 전`;
-}
-
-function RoleChangeCard({ n, colors }: { n: Notification; colors: (typeof Colors)["light"] }) {
-  const roleLabel = n.newRole === "admin" ? "관리자" : "일반 멤버";
-  return (
-    <View style={[styles.activityCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={[styles.activityAvatar, { backgroundColor: n.actorAvatarColor }]}>
-        <Text style={styles.activityAvatarInitial}>{n.actorInitial}</Text>
-      </View>
-      <View style={styles.activityContent}>
-        <Text style={[styles.activityText, { color: colors.text }]}>
-          <Text style={styles.activityBold}>{n.actorName}</Text>
-          {"님이 "}
-          <Text style={styles.activityBold}>{n.targetMemberName}</Text>
-          {"님의 역할을 "}
-          <Text style={[styles.activityBold, { color: colors.tint }]}>{roleLabel}</Text>
-          {"로 변경했습니다"}
-        </Text>
-        <Text style={[styles.activityDate, { color: colors.subtext }]}>{timeAgo(n.timestamp)}</Text>
-      </View>
-      <View style={[styles.roleBadgeIcon, { backgroundColor: n.newRole === "admin" ? colors.tint + "22" : colors.border + "44" }]}>
-        <Ionicons name={n.newRole === "admin" ? "shield-checkmark" : "person"} size={20} color={n.newRole === "admin" ? colors.tint : colors.subtext} />
-      </View>
-    </View>
-  );
+  if (days < 30) return `${days}일 전`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}개월 전`;
+  return `${Math.floor(months / 12)}년 전`;
 }
 
 export default function NewsScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? "light"];
-  const { notifications } = useAlbums();
+  const { session, clearSession } = useAuth();
+
+  const [members, setMembers] = useState<ApiMember[]>([]);
+  const [activity, setActivity] = useState<ApiActivity[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchData = useCallback(() => {
+    if (!session) return;
+    setLoading(true);
+    Promise.all([
+      getMembers(session.albumId, session.token),
+      getActivity(session.albumId, session.token),
+    ])
+      .then(([m, a]) => {
+        setMembers(m);
+        setActivity(a);
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) clearSession();
+      })
+      .finally(() => setLoading(false));
+  }, [session]);
+
+  useFocusEffect(fetchData);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <Text style={[styles.headerTitle, { color: colors.text }]}>근황</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Members Section */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.subtext }]}>멤버</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.membersRow}>
-            {MEMBERS.map((member) => (
-              <View key={member.id} style={styles.memberCard}>
-                <View style={styles.avatarWrapper}>
-                  <View style={[styles.avatar, { backgroundColor: member.color }]}>
-                    <Text style={styles.avatarInitial}>{member.initial}</Text>
+      {loading && members.length === 0 ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator color={colors.tint} size="large" />
+        </View>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false}>
+          {/* 멤버 섹션 */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: colors.subtext }]}>멤버</Text>
+            {members.length === 0 ? (
+              <Text style={[styles.emptyText, { color: colors.subtext }]}>멤버가 없습니다</Text>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.membersRow}>
+                {members.map((m) => {
+                  const color = avatarColor(m.name);
+                  return (
+                    <View key={m.id} style={styles.memberCard}>
+                      <View style={styles.avatarWrapper}>
+                        <View style={[styles.avatar, { backgroundColor: color }]}>
+                          <Text style={styles.avatarInitial}>{m.name.charAt(0)}</Text>
+                        </View>
+                        {m.role === 'admin' && (
+                          <View style={[styles.adminDot, { backgroundColor: colors.tint }]}>
+                            <Ionicons name="shield-checkmark" size={8} color="#fff" />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={[styles.memberName, { color: colors.text }]} numberOfLines={1}>{m.name}</Text>
+                      <Text style={[styles.memberRole, { color: colors.subtext }]}>
+                        {m.is_creator ? '관리자(생성)' : m.role === 'admin' ? '관리자' : '멤버'}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+
+          <View style={[styles.sectionDivider, { backgroundColor: colors.border }]} />
+
+          {/* 소식 섹션 */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: colors.subtext }]}>소식</Text>
+
+            {activity.length === 0 ? (
+              <Text style={[styles.emptyText, { color: colors.subtext }]}>아직 업로드된 사진이 없습니다</Text>
+            ) : (
+              activity.map((a) => {
+                const color = avatarColor(a.uploader_name);
+                return (
+                  <View
+                    key={a.uploader_id}
+                    style={[styles.activityCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                  >
+                    <View style={[styles.activityAvatar, { backgroundColor: color }]}>
+                      <Text style={styles.activityAvatarInitial}>{a.uploader_name.charAt(0)}</Text>
+                    </View>
+                    <View style={styles.activityContent}>
+                      <Text style={[styles.activityText, { color: colors.text }]}>
+                        <Text style={styles.activityBold}>{a.uploader_name}</Text>
+                        {"님이 사진·동영상을 "}
+                        <Text style={styles.activityBold}>{a.count}개</Text>
+                        {" 추가했습니다"}
+                      </Text>
+                      <Text style={[styles.activityDate, { color: colors.subtext }]}>
+                        {timeAgo(a.last_uploaded_at)}
+                      </Text>
+                    </View>
+                    <View style={[styles.activityIconWrap, { backgroundColor: color + '22' }]}>
+                      <Ionicons name="images-outline" size={20} color={color} />
+                    </View>
                   </View>
-                  {member.isOnline && <View style={styles.onlineDot} />}
-                </View>
-                <Text style={[styles.memberName, { color: colors.text }]} numberOfLines={1}>{member.name}</Text>
-                <Text style={[styles.memberLastSeen, { color: colors.subtext }]}>{member.lastSeen}</Text>
-              </View>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* Divider */}
-        <View style={[styles.sectionDivider, { backgroundColor: colors.border }]} />
-
-        {/* Activity Feed */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.subtext }]}>소식</Text>
-
-          {/* Role-change notifications (newest first) */}
-          {notifications.map((n) => (
-            <RoleChangeCard key={n.id} n={n} colors={colors} />
-          ))}
-
-          {/* Static upload activities */}
-          {STATIC_ACTIVITIES.map((activity) => (
-            <View
-              key={activity.id}
-              style={[styles.activityCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-            >
-              <View style={[styles.activityAvatar, { backgroundColor: activity.avatarColor }]}>
-                <Text style={styles.activityAvatarInitial}>{activity.initial}</Text>
-              </View>
-              <View style={styles.activityContent}>
-                <Text style={[styles.activityText, { color: colors.text }]}>
-                  <Text style={styles.activityBold}>{activity.member}</Text>
-                  {" 님이 사진·동영상을 "}
-                  <Text style={styles.activityBold}>{activity.count}개</Text>
-                  {" 추가했습니다"}
-                </Text>
-                <Text style={[styles.activityDate, { color: colors.subtext }]}>{activity.date}</Text>
-              </View>
-              <View style={[styles.activityThumbnail, { backgroundColor: activity.thumbnailColor }]}>
-                <Ionicons name="image" size={16} color="rgba(0,0,0,0.3)" />
-              </View>
-            </View>
-          ))}
-        </View>
-      </ScrollView>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
@@ -131,6 +151,8 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
   headerTitle: { fontSize: 22, fontWeight: "700" },
+  loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
+  emptyText: { fontSize: 14, paddingHorizontal: 20, paddingVertical: 8 },
   section: { paddingTop: 20, paddingBottom: 8 },
   sectionTitle: { fontSize: 12, fontWeight: "600", letterSpacing: 0.8, textTransform: "uppercase", paddingHorizontal: 20, marginBottom: 14 },
   membersRow: { paddingHorizontal: 16, gap: 8 },
@@ -138,9 +160,14 @@ const styles = StyleSheet.create({
   avatarWrapper: { position: "relative" },
   avatar: { width: 56, height: 56, borderRadius: 28, justifyContent: "center", alignItems: "center" },
   avatarInitial: { color: "#fff", fontSize: 20, fontWeight: "700" },
-  onlineDot: { position: "absolute", bottom: 2, right: 2, width: 14, height: 14, borderRadius: 7, backgroundColor: "#34C759", borderWidth: 2, borderColor: "#fff" },
+  adminDot: {
+    position: "absolute", bottom: 2, right: 2,
+    width: 16, height: 16, borderRadius: 8,
+    justifyContent: "center", alignItems: "center",
+    borderWidth: 2, borderColor: "#fff",
+  },
   memberName: { fontSize: 12, fontWeight: "500", textAlign: "center" },
-  memberLastSeen: { fontSize: 11, textAlign: "center" },
+  memberRole: { fontSize: 11, textAlign: "center" },
   sectionDivider: { height: 8, marginTop: 8 },
   activityCard: { marginHorizontal: 16, marginBottom: 10, padding: 14, borderRadius: 14, flexDirection: "row", alignItems: "center", gap: 12, borderWidth: StyleSheet.hairlineWidth },
   activityAvatar: { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center", flexShrink: 0 },
@@ -149,6 +176,5 @@ const styles = StyleSheet.create({
   activityText: { fontSize: 14, lineHeight: 20 },
   activityBold: { fontWeight: "600" },
   activityDate: { fontSize: 12 },
-  activityThumbnail: { width: 48, height: 48, borderRadius: 8, justifyContent: "center", alignItems: "center", flexShrink: 0 },
-  roleBadgeIcon: { width: 48, height: 48, borderRadius: 8, justifyContent: "center", alignItems: "center", flexShrink: 0 },
+  activityIconWrap: { width: 48, height: 48, borderRadius: 8, justifyContent: "center", alignItems: "center", flexShrink: 0 },
 });

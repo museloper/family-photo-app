@@ -1,6 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
+  Animated,
   Dimensions,
   FlatList,
   KeyboardAvoidingView,
@@ -16,8 +20,9 @@ import {
 } from 'react-native';
 
 import { Colors } from '@/constants/theme';
-import { useAlbums } from '@/contexts/AlbumContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { getPhotos, getAlbums, FILE_BASE, ApiError, ApiAlbum, toggleLike, getComments, addComment, updateVisibility, ApiComment } from '@/services/api';
 
 const { width } = Dimensions.get('window');
 const PHOTO_SIZE = Math.floor((width - 2) / 3);
@@ -28,108 +33,59 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const TIMELINE = (() => {
+function buildTimeline(photos: Array<{ year: number; month: number }>) {
+  const seen = new Set<string>();
   const items: Array<{ year: number; month: number }> = [];
-  const now = new Date();
-  const curYear = now.getFullYear();
-  const curMonth = now.getMonth() + 1;
-  for (let y = curYear; y >= curYear - 4; y--) {
-    const maxM = y === curYear ? curMonth : 12;
-    for (let m = maxM; m >= 1; m--) {
-      items.push({ year: y, month: m });
+  for (const p of photos) {
+    const key = `${p.year}-${p.month}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      items.push({ year: p.year, month: p.month });
     }
   }
+  // Sort descending (most recent first)
+  items.sort((a, b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
   return items;
-})();
+}
 
-const UNIQUE_YEARS = [...new Set(TIMELINE.map((t) => t.year))];
-
-type MockPhoto = {
+type Photo = {
   id: string;
+  url: string;
   year: number;
   month: number;
-  color: string;
   isVideo: boolean;
-  user: string;
-  initial: string;
-  avatarColor: string;
-  timeAgo: string;
-};
-
-const MOCK_PHOTOS: MockPhoto[] = [
-  { id: '1',  year: 2026, month: 3,  color: '#FFB3C6', isVideo: false, user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A', timeAgo: '오늘' },
-  { id: '2',  year: 2026, month: 3,  color: '#FFC9A0', isVideo: false, user: '크라잉넛', initial: '크', avatarColor: '#6B8AFF', timeAgo: '오늘' },
-  { id: '3',  year: 2026, month: 3,  color: '#B5EAD7', isVideo: true,  user: '라이언',   initial: '라', avatarColor: '#6BC97A', timeAgo: '오늘' },
-  { id: '4',  year: 2026, month: 3,  color: '#C7B9FF', isVideo: false, user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A', timeAgo: '어제' },
-  { id: '5',  year: 2026, month: 3,  color: '#FFDAC1', isVideo: false, user: '크라잉넛', initial: '크', avatarColor: '#6B8AFF', timeAgo: '어제' },
-  { id: '6',  year: 2026, month: 3,  color: '#E2F0CB', isVideo: false, user: '라이언',   initial: '라', avatarColor: '#6BC97A', timeAgo: '3일 전' },
-  { id: '7',  year: 2026, month: 3,  color: '#B5D8F7', isVideo: false, user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A', timeAgo: '3일 전' },
-  { id: '8',  year: 2026, month: 3,  color: '#FFDAC1', isVideo: true,  user: '크라잉넛', initial: '크', avatarColor: '#6B8AFF', timeAgo: '1주 전' },
-  { id: '9',  year: 2026, month: 3,  color: '#FFB3C6', isVideo: false, user: '라이언',   initial: '라', avatarColor: '#6BC97A', timeAgo: '1주 전' },
-  { id: '10', year: 2026, month: 2,  color: '#B5EAD7', isVideo: false, user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A', timeAgo: '4주 전' },
-  { id: '11', year: 2026, month: 2,  color: '#C7B9FF', isVideo: false, user: '크라잉넛', initial: '크', avatarColor: '#6B8AFF', timeAgo: '4주 전' },
-  { id: '12', year: 2025, month: 12, color: '#FFB3C6', isVideo: false, user: '라이언',   initial: '라', avatarColor: '#6BC97A', timeAgo: '3개월 전' },
-  { id: '13', year: 2025, month: 11, color: '#FFC9A0', isVideo: false, user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A', timeAgo: '4개월 전' },
-];
-
-type Reply = {
-  id: string;
-  user: string;
-  initial: string;
-  avatarColor: string;
-  text: string;
-  likes: number;
+  uploadedBy: string;
+  takenAt: string | null;
+  visibility: 'public' | 'family' | 'private';
+  likeCount: number;
   likedByMe: boolean;
 };
 
 type Comment = {
   id: string;
+  userId: number;
   user: string;
-  initial: string;
-  avatarColor: string;
   text: string;
-  likes: number;
-  likedByMe: boolean;
-  replies: Reply[];
+  replies: Comment[];
 };
 
-const INITIAL_PHOTO_LIKES: Record<string, number> = {
-  '1': 5, '2': 3, '3': 8, '4': 2, '5': 0,
-  '6': 4, '7': 1, '8': 7, '9': 2, '10': 3,
-  '11': 1, '12': 6, '13': 2,
+const VISIBILITY_LABELS: Record<string, string> = {
+  public: '전체 공개',
+  family: '가족 공개',
+  private: '비공개',
 };
+const VISIBILITY_ORDER: Array<'public' | 'family' | 'private'> = ['public', 'family', 'private'];
 
-const SEED_COMMENTS: Record<string, Comment[]> = {
-  '1': [
-    {
-      id: 'c1', user: '크라잉넛', initial: '크', avatarColor: '#6B8AFF',
-      text: '너무 예뻐요! 🥰', likes: 2, likedByMe: false,
-      replies: [
-        { id: 'r1', user: '라이언', initial: '라', avatarColor: '#6BC97A', text: '진짜요 ❤️', likes: 1, likedByMe: false },
-      ],
-    },
-    {
-      id: 'c2', user: '라이언', initial: '라', avatarColor: '#6BC97A',
-      text: '귀엽네요 ☺️', likes: 1, likedByMe: false, replies: [],
-    },
-  ],
-  '3': [
-    {
-      id: 'c1', user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A',
-      text: '동영상이네요 👍', likes: 0, likedByMe: false, replies: [],
-    },
-  ],
-  '8': [
-    {
-      id: 'c1', user: '라이언', initial: '라', avatarColor: '#6BC97A',
-      text: '와 잘 찍었다!', likes: 3, likedByMe: false,
-      replies: [
-        { id: 'r1', user: '크라잉넛', initial: '크', avatarColor: '#6B8AFF', text: '맞아요 ㅎㅎ', likes: 0, likedByMe: false },
-        { id: 'r2', user: '플라잉캣', initial: '플', avatarColor: '#FF6B8A', text: '부럽다 😊', likes: 1, likedByMe: false },
-      ],
-    },
-  ],
-};
+function getAvatarColor(name: string): string {
+  const colors = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA'];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function getInitial(name: string): string {
+  return name.charAt(0);
+}
 
 function getTimeSinceBirth(photoYear: number, photoMonth: number, birthYear: number, birthMonth: number): string {
   const birthTotalMonths = birthYear * 12 + birthMonth;
@@ -149,27 +105,89 @@ export default function AlbumScreen() {
   const colors = Colors[colorScheme ?? 'light'];
   const isDark = colorScheme === 'dark';
 
-  const { albums, selectedAlbumId, selectedAlbum, setSelectedAlbumId } = useAlbums();
-  const BABY_NAME = selectedAlbum.babyName;
-  const BABY_BIRTH_YEAR = selectedAlbum.birthYear;
-  const BABY_BIRTH_MONTH = selectedAlbum.birthMonth;
+  const { session, clearSession, switchAlbum } = useAuth();
 
-  // Timeline
+  // Real albums from API
+  const [apiAlbums, setApiAlbums] = useState<ApiAlbum[]>([]);
+  const fetchAlbums = useCallback(() => {
+    if (!session) return;
+    getAlbums(session.token).then(setApiAlbums).catch(() => {});
+  }, [session]);
+
+  useFocusEffect(useCallback(() => { fetchAlbums(); }, [fetchAlbums]));
+
+  // babyBirth는 "YYYY-MM-DD" 형식으로 저장됨
+  const BABY_NAME = session?.babyName ?? '';
+  const [BABY_BIRTH_YEAR, BABY_BIRTH_MONTH] = session?.babyBirth
+    ? session.babyBirth.slice(0, 10).split('-').map(Number)
+    : [0, 0];
+
+  // Photos from API
+  const [photos, setPhotos] = useState<Photo[]>([]);
+
+  const fetchPhotos = useCallback(() => {
+    if (!session) return;
+    getPhotos(session.albumId, session.token)
+      .then((data) => {
+        const mapped: Photo[] = (data.photos ?? []).map((p) => {
+          const d = new Date(p.taken_at ?? p.uploaded_at);
+          return {
+            id: String(p.id),
+            url: FILE_BASE + (p.medium_url ?? p.original_url),
+            year: d.getFullYear(),
+            month: d.getMonth() + 1,
+            isVideo: p.mime_type?.startsWith('video') ?? false,
+            uploadedBy: p.uploader_name ?? '가족',
+            takenAt: p.taken_at ?? null,
+            visibility: p.visibility ?? 'family',
+            likeCount: p.like_count ?? 0,
+            likedByMe: p.liked_by_me ?? false,
+          };
+        });
+        setPhotos(mapped);
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+          clearSession();
+        }
+      });
+  }, [session]);
+
+  // 탭 포커스될 때마다 사진 목록 갱신 (업로드 후 즉시 반영)
+  useFocusEffect(fetchPhotos);
+
+  // 앨범 전환 시 즉시 새 앨범 사진 로드
+  useEffect(() => { fetchPhotos(); }, [session?.albumId]);
+
+  // Timeline — derived from actual photos
+  const timeline = buildTimeline(photos);
+  const uniqueYears = [...new Set(timeline.map((t) => t.year))];
+
   const timelineRef = useRef<FlatList>(null);
   const yearScrollRef = useRef<ScrollView>(null);
   const yearTabXRef = useRef<Record<number, number>>({});
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [visibleYear, setVisibleYear] = useState(TIMELINE[0].year);
-  const visibleYearRef = useRef(TIMELINE[0].year);
+  const [visibleYear, setVisibleYear] = useState<number | null>(null);
+  const visibleYearRef = useRef<number | null>(null);
 
-  const { year: selectedYear, month: selectedMonth } = TIMELINE[selectedIndex];
+  // Reset selection when timeline changes
+  useEffect(() => {
+    setSelectedIndex(0);
+    const firstYear = timeline[0]?.year ?? null;
+    visibleYearRef.current = firstYear;
+    setVisibleYear(firstYear);
+  }, [photos]);
 
-  const filteredPhotos = MOCK_PHOTOS.filter(
-    (p) => p.year === selectedYear && p.month === selectedMonth
-  );
+  const selectedEntry = timeline[selectedIndex] ?? null;
+  const selectedYear = selectedEntry?.year ?? 0;
+  const selectedMonth = selectedEntry?.month ?? 0;
+
+  const filteredPhotos = selectedEntry
+    ? photos.filter((p) => p.year === selectedYear && p.month === selectedMonth)
+    : [];
   const heroPhoto = filteredPhotos[0] ?? null;
   const restPhotos = filteredPhotos.slice(1);
-  const photoRows: MockPhoto[][] = [];
+  const photoRows: Photo[][] = [];
   for (let i = 0; i < restPhotos.length; i += 3) {
     photoRows.push(restPhotos.slice(i, i + 3));
   }
@@ -177,7 +195,7 @@ export default function AlbumScreen() {
   const selectIndex = (idx: number) => setSelectedIndex(idx);
 
   const scrollToYear = (year: number) => {
-    const idx = TIMELINE.findIndex((item) => item.year === year);
+    const idx = timeline.findIndex((item) => item.year === year);
     if (idx !== -1) {
       timelineRef.current?.scrollToIndex({ index: idx, animated: true });
       setSelectedIndex(idx);
@@ -188,15 +206,15 @@ export default function AlbumScreen() {
 
   const handleMonthScroll = useCallback((e: { nativeEvent: { contentOffset: { x: number } } }) => {
     const idx = Math.floor(e.nativeEvent.contentOffset.x / MONTH_ITEM_WIDTH);
-    const year = TIMELINE[Math.min(idx, TIMELINE.length - 1)]?.year;
+    const year = timeline[Math.min(idx, timeline.length - 1)]?.year ?? null;
     if (year && year !== visibleYearRef.current) {
       visibleYearRef.current = year;
       setVisibleYear(year);
     }
-  }, []);
+  }, [timeline]);
 
-  // Sync year tab scroll position when visibleYear changes
   useEffect(() => {
+    if (visibleYear == null) return;
     const x = yearTabXRef.current[visibleYear];
     if (x !== undefined) {
       yearScrollRef.current?.scrollTo({ x: x - width / 2 + 40, animated: true });
@@ -204,81 +222,98 @@ export default function AlbumScreen() {
   }, [visibleYear]);
 
   // Modal / interaction state
-  const [selectedPhoto, setSelectedPhoto] = useState<MockPhoto | null>(null);
-  const [likedPhotos, setLikedPhotos] = useState<Set<string>>(new Set());
-  const [photoLikeCounts, setPhotoLikeCounts] = useState<Record<string, number>>(INITIAL_PHOTO_LIKES);
-  const [allComments, setAllComments] = useState<Record<string, Comment[]>>(SEED_COMMENTS);
+  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [allComments, setAllComments] = useState<Record<string, Comment[]>>({});
   const [commentInput, setCommentInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ commentId: string; userName: string } | null>(null);
 
-  const togglePhotoLike = (photoId: string) => {
-    setLikedPhotos((prev) => {
-      const next = new Set(prev);
-      const isLiked = next.has(photoId);
-      isLiked ? next.delete(photoId) : next.add(photoId);
-      setPhotoLikeCounts((c) => ({ ...c, [photoId]: (c[photoId] ?? 0) + (isLiked ? -1 : 1) }));
-      return next;
-    });
-  };
+  // 모달 열릴 때 댓글 로드
+  useEffect(() => {
+    if (!selectedPhoto || !session) return;
+    getComments(selectedPhoto.id, session.token)
+      .then((data: ApiComment[]) => {
+        const mapped: Comment[] = data.map((c) => ({
+          id: String(c.id),
+          userId: c.user_id,
+          user: c.user_name,
+          text: c.body,
+          replies: (c.replies ?? []).map((r) => ({
+            id: String(r.id),
+            userId: r.user_id,
+            user: r.user_name,
+            text: r.body,
+            replies: [],
+          })),
+        }));
+        setAllComments((prev) => ({ ...prev, [selectedPhoto.id]: mapped }));
+      })
+      .catch(() => {});
+  }, [selectedPhoto?.id]);
 
-  const toggleCommentLike = (photoId: string, commentId: string) => {
-    setAllComments((prev) => ({
-      ...prev,
-      [photoId]: (prev[photoId] ?? []).map((c) =>
-        c.id === commentId
-          ? { ...c, likes: c.likedByMe ? c.likes - 1 : c.likes + 1, likedByMe: !c.likedByMe }
-          : c
-      ),
-    }));
-  };
-
-  const toggleReplyLike = (photoId: string, commentId: string, replyId: string) => {
-    setAllComments((prev) => ({
-      ...prev,
-      [photoId]: (prev[photoId] ?? []).map((c) =>
-        c.id === commentId
-          ? {
-              ...c,
-              replies: c.replies.map((r) =>
-                r.id === replyId
-                  ? { ...r, likes: r.likedByMe ? r.likes - 1 : r.likes + 1, likedByMe: !r.likedByMe }
-                  : r
-              ),
-            }
-          : c
-      ),
-    }));
-  };
-
-  const submitComment = () => {
-    if (!selectedPhoto || !commentInput.trim()) return;
-    const text = commentInput.trim();
-
-    if (replyingTo) {
-      const newReply: Reply = {
-        id: `r-${Date.now()}`,
-        user: '나', initial: '나', avatarColor: '#FF6B8A',
-        text, likes: 0, likedByMe: false,
-      };
-      setAllComments((prev) => ({
-        ...prev,
-        [selectedPhoto.id]: (prev[selectedPhoto.id] ?? []).map((c) =>
-          c.id === replyingTo.commentId ? { ...c, replies: [...c.replies, newReply] } : c
-        ),
-      }));
-      setReplyingTo(null);
-    } else {
-      const newComment: Comment = {
-        id: `c-${Date.now()}`,
-        user: '나', initial: '나', avatarColor: '#FF6B8A',
-        text, likes: 0, likedByMe: false, replies: [],
-      };
-      setAllComments((prev) => ({
-        ...prev,
-        [selectedPhoto.id]: [...(prev[selectedPhoto.id] ?? []), newComment],
-      }));
+  const handleToggleLike = async (photo: Photo) => {
+    if (!session) return;
+    // 낙관적 업데이트
+    setPhotos((prev) => prev.map((p) =>
+      p.id === photo.id
+        ? { ...p, likedByMe: !p.likedByMe, likeCount: p.likeCount + (p.likedByMe ? -1 : 1) }
+        : p
+    ));
+    try {
+      await toggleLike(photo.id, session.token);
+    } catch {
+      // 실패 시 롤백
+      setPhotos((prev) => prev.map((p) =>
+        p.id === photo.id
+          ? { ...p, likedByMe: photo.likedByMe, likeCount: photo.likeCount }
+          : p
+      ));
     }
+  };
+
+  const handleChangeVisibility = async (photo: Photo) => {
+    if (!session) return;
+    const nextIdx = (VISIBILITY_ORDER.indexOf(photo.visibility) + 1) % VISIBILITY_ORDER.length;
+    const next = VISIBILITY_ORDER[nextIdx];
+    setPhotos((prev) => prev.map((p) => p.id === photo.id ? { ...p, visibility: next } : p));
+    try {
+      await updateVisibility(photo.id, session.token, next);
+    } catch (e) {
+      setPhotos((prev) => prev.map((p) => p.id === photo.id ? { ...p, visibility: photo.visibility } : p));
+      Alert.alert('공개 범위 변경 실패', e instanceof Error ? e.message : '오류가 발생했습니다');
+    }
+  };
+
+  const submitComment = async () => {
+    if (!selectedPhoto || !commentInput.trim() || !session) return;
+    const text = commentInput.trim();
     setCommentInput('');
+
+    try {
+      const parentId = replyingTo ? Number(replyingTo.commentId) : undefined;
+      const saved = await addComment(selectedPhoto.id, session.token, text, parentId);
+      const newEntry: Comment = {
+        id: String(saved.id),
+        userId: saved.user_id,
+        user: saved.user_name,
+        text: saved.body,
+        replies: [],
+      };
+      setAllComments((prev) => {
+        const cur = prev[selectedPhoto.id] ?? [];
+        if (replyingTo) {
+          return {
+            ...prev,
+            [selectedPhoto.id]: cur.map((c) =>
+              c.id === replyingTo.commentId ? { ...c, replies: [...c.replies, newEntry] } : c
+            ),
+          };
+        }
+        return { ...prev, [selectedPhoto.id]: [...cur, newEntry] };
+      });
+      setReplyingTo(null);
+    } catch {
+      setCommentInput(text); // 실패 시 복원
+    }
   };
 
   const closeModal = () => {
@@ -288,30 +323,43 @@ export default function AlbumScreen() {
   };
 
   const photoComments = selectedPhoto ? (allComments[selectedPhoto.id] ?? []) : [];
-  const photoIsLiked = selectedPhoto ? likedPhotos.has(selectedPhoto.id) : false;
+  const currentPhoto = selectedPhoto ? (photos.find((p) => p.id === selectedPhoto.id) ?? selectedPhoto) : null;
   const totalCommentCount = photoComments.reduce((sum, c) => sum + 1 + c.replies.length, 0);
+
+  // Animated arrow for empty state
+  const arrowAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(arrowAnim, { toValue: 10, duration: 600, useNativeDriver: true }),
+        Animated.timing(arrowAnim, { toValue: 0, duration: 600, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [arrowAnim]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>우리 가족 앨범</Text>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>
+          {session?.babyName ? `${session.babyName}의 앨범` : '가족 앨범'}
+        </Text>
       </View>
 
       {/* Album selector — shown when multiple albums exist */}
-      {albums.length > 1 && (
+      {apiAlbums.length > 1 && (
         <View style={[styles.albumSelectorContainer, { borderBottomColor: colors.border }]}>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.albumSelectorContent}
           >
-            {albums.map((album) => {
-              const isActive = album.id === selectedAlbumId;
+            {apiAlbums.map((album) => {
+              const isActive = album.id === session?.albumId;
               return (
                 <TouchableOpacity
                   key={album.id}
-                  onPress={() => setSelectedAlbumId(album.id)}
+                  onPress={() => !isActive && switchAlbum(album.id, album.baby_name, album.birth_date)}
                   style={[
                     styles.albumChip,
                     isActive
@@ -321,13 +369,8 @@ export default function AlbumScreen() {
                   activeOpacity={0.75}
                 >
                   <View style={[styles.albumChipDot, { backgroundColor: isActive ? 'rgba(255,255,255,0.7)' : album.color }]} />
-                  <Text
-                    style={[
-                      styles.albumChipText,
-                      { color: isActive ? '#fff' : colors.text },
-                    ]}
-                  >
-                    {album.albumName}
+                  <Text style={[styles.albumChipText, { color: isActive ? '#fff' : colors.text }]}>
+                    {album.name}
                   </Text>
                 </TouchableOpacity>
               );
@@ -336,107 +379,113 @@ export default function AlbumScreen() {
         </View>
       )}
 
-      {/* Year tabs */}
-      <View style={[styles.yearContainer, { borderBottomColor: colors.border }]}>
-        <ScrollView
-          ref={yearScrollRef}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.yearScrollContent}
-        >
-          {UNIQUE_YEARS.map((year) => {
-            const isActive = visibleYear === year;
-            return (
-              <TouchableOpacity
-                key={year}
-                onPress={() => scrollToYear(year)}
-                style={styles.yearTab}
-                activeOpacity={0.7}
-                onLayout={(e) => { yearTabXRef.current[year] = e.nativeEvent.layout.x; }}
-              >
-                <Text
-                  style={[
-                    styles.yearText,
-                    isActive
-                      ? { color: colors.text, fontWeight: '700' }
-                      : { color: colors.subtext, fontWeight: '400' },
-                  ]}
+      {/* Year tabs — only shown when photos exist */}
+      {timeline.length > 0 && (
+        <View style={[styles.yearContainer, { borderBottomColor: colors.border }]}>
+          <ScrollView
+            ref={yearScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.yearScrollContent}
+          >
+            {uniqueYears.map((year) => {
+              const isActive = visibleYear === year;
+              return (
+                <TouchableOpacity
+                  key={year}
+                  onPress={() => scrollToYear(year)}
+                  style={styles.yearTab}
+                  activeOpacity={0.7}
+                  onLayout={(e) => { yearTabXRef.current[year] = e.nativeEvent.layout.x; }}
                 >
-                  {year}
-                </Text>
-                <View
-                  style={[
-                    styles.yearTabBar,
-                    { backgroundColor: isActive ? colors.tint : 'transparent' },
-                  ]}
-                />
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-
-      {/* Month timeline */}
-      <View style={[styles.monthContainer, { borderBottomColor: colors.border }]}>
-        <FlatList
-          ref={timelineRef}
-          data={TIMELINE}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          keyExtractor={(item) => `${item.year}-${item.month}`}
-          getItemLayout={(_, index) => ({
-            length: MONTH_ITEM_WIDTH,
-            offset: MONTH_ITEM_WIDTH * index,
-            index,
-          })}
-          scrollEventThrottle={100}
-          onScroll={handleMonthScroll}
-          renderItem={({ item, index }) => {
-            const isSelected = index === selectedIndex;
-            const isYearBoundary = index > 0 && item.year !== TIMELINE[index - 1].year;
-            return (
-              <TouchableOpacity
-                onPress={() => selectIndex(index)}
-                style={[styles.monthItem, { width: MONTH_ITEM_WIDTH }]}
-                activeOpacity={0.7}
-              >
-                {isYearBoundary ? (
-                  <Text style={[styles.yearBoundaryLabel, { color: colors.subtext }]}>
-                    {item.year}
+                  <Text
+                    style={[
+                      styles.yearText,
+                      isActive
+                        ? { color: colors.text, fontWeight: '700' }
+                        : { color: colors.subtext, fontWeight: '400' },
+                    ]}
+                  >
+                    {year}
                   </Text>
-                ) : (
-                  <View style={styles.yearBoundarySpace} />
-                )}
-                <Text
-                  style={[
-                    styles.monthText,
-                    isSelected
-                      ? { color: colors.tint, fontWeight: '700' }
-                      : { color: colors.subtext },
-                  ]}
+                  <View
+                    style={[
+                      styles.yearTabBar,
+                      { backgroundColor: isActive ? colors.tint : 'transparent' },
+                    ]}
+                  />
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Month timeline — only shown when photos exist */}
+      {timeline.length > 0 && (
+        <View style={[styles.monthContainer, { borderBottomColor: colors.border }]}>
+          <FlatList
+            ref={timelineRef}
+            data={timeline}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item) => `${item.year}-${item.month}`}
+            contentContainerStyle={timeline.length === 1 ? { flexGrow: 1, justifyContent: 'center' } : undefined}
+            getItemLayout={(_, index) => ({
+              length: MONTH_ITEM_WIDTH,
+              offset: MONTH_ITEM_WIDTH * index,
+              index,
+            })}
+            scrollEventThrottle={100}
+            onScroll={handleMonthScroll}
+            renderItem={({ item, index }) => {
+              const isSelected = index === selectedIndex;
+              const isYearBoundary = index > 0 && item.year !== timeline[index - 1].year;
+              return (
+                <TouchableOpacity
+                  onPress={() => selectIndex(index)}
+                  style={[styles.monthItem, { width: MONTH_ITEM_WIDTH }]}
+                  activeOpacity={0.7}
                 >
-                  {item.month}월
-                </Text>
-                <View
-                  style={[
-                    styles.monthDot,
-                    { backgroundColor: isSelected ? colors.tint : 'transparent' },
-                  ]}
-                />
-              </TouchableOpacity>
-            );
-          }}
-        />
-      </View>
+                  {isYearBoundary ? (
+                    <Text style={[styles.yearBoundaryLabel, { color: colors.subtext }]}>
+                      {item.year}
+                    </Text>
+                  ) : (
+                    <View style={styles.yearBoundarySpace} />
+                  )}
+                  <Text
+                    style={[
+                      styles.monthText,
+                      isSelected
+                        ? { color: colors.tint, fontWeight: '700' }
+                        : { color: colors.subtext },
+                    ]}
+                  >
+                    {item.month}월
+                  </Text>
+                  <View
+                    style={[
+                      styles.monthDot,
+                      { backgroundColor: isSelected ? colors.tint : 'transparent' },
+                    ]}
+                  />
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+      )}
 
       {/* Photo Area */}
-      {filteredPhotos.length === 0 ? (
+      {photos.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Ionicons name="camera-outline" size={52} color={colors.subtext} />
-          <Text style={[styles.emptyText, { color: colors.text }]}>이 달의 사진이 없어요</Text>
-          <Text style={[styles.emptySubtext, { color: colors.subtext }]}>
-            추가 탭에서 사진을 올려보세요
+          <Text style={[styles.emptyGuide, { color: colors.subtext }]}>
+            추가 버튼을 터치하면 사진과{'\n'}동영상을 추가할 수 있습니다
           </Text>
+          <Animated.View style={{ transform: [{ translateY: arrowAnim }], marginTop: 8 }}>
+            <Ionicons name="arrow-down" size={32} color={colors.tint} />
+          </Animated.View>
         </View>
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
@@ -444,9 +493,10 @@ export default function AlbumScreen() {
           {heroPhoto && (
             <TouchableOpacity
               activeOpacity={0.92}
-              style={[styles.heroPhoto, { backgroundColor: heroPhoto.color }]}
+              style={styles.heroPhoto}
               onPress={() => setSelectedPhoto(heroPhoto)}
             >
+              <Image source={{ uri: heroPhoto.url }} style={StyleSheet.absoluteFill} contentFit="cover" />
               {heroPhoto.isVideo && (
                 <View style={styles.heroVideoBadge}>
                   <Ionicons name="videocam" size={13} color="#fff" />
@@ -462,15 +512,14 @@ export default function AlbumScreen() {
                   {BABY_NAME}, {getTimeSinceBirth(selectedYear, selectedMonth, BABY_BIRTH_YEAR, BABY_BIRTH_MONTH)}
                 </Text>
               </View>
-              {/* Like count overlay */}
-              {(photoLikeCounts[heroPhoto.id] ?? 0) > 0 && (
+              {heroPhoto.likeCount > 0 && (
                 <View style={styles.heroLikeBadge}>
                   <Ionicons
-                    name={likedPhotos.has(heroPhoto.id) ? 'heart' : 'heart-outline'}
+                    name={heroPhoto.likedByMe ? 'heart' : 'heart-outline'}
                     size={13}
                     color="#fff"
                   />
-                  <Text style={styles.heroLikeCount}>{photoLikeCounts[heroPhoto.id]}</Text>
+                  <Text style={styles.heroLikeCount}>{heroPhoto.likeCount}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -484,22 +533,23 @@ export default function AlbumScreen() {
                   <TouchableOpacity
                     key={photo.id}
                     activeOpacity={0.9}
-                    style={[styles.photoItem, { backgroundColor: photo.color }]}
+                    style={styles.photoItem}
                     onPress={() => setSelectedPhoto(photo)}
                   >
+                    <Image source={{ uri: photo.url }} style={StyleSheet.absoluteFill} contentFit="cover" />
                     {photo.isVideo && (
                       <View style={styles.videoBadge}>
                         <Ionicons name="videocam" size={10} color="#fff" />
                       </View>
                     )}
-                    {(photoLikeCounts[photo.id] ?? 0) > 0 && (
+                    {photo.likeCount > 0 && (
                       <View style={styles.gridLikeBadge}>
                         <Ionicons
-                          name={likedPhotos.has(photo.id) ? 'heart' : 'heart-outline'}
+                          name={photo.likedByMe ? 'heart' : 'heart-outline'}
                           size={10}
                           color="#fff"
                         />
-                        <Text style={styles.gridLikeCount}>{photoLikeCounts[photo.id]}</Text>
+                        <Text style={styles.gridLikeCount}>{photo.likeCount}</Text>
                       </View>
                     )}
                   </TouchableOpacity>
@@ -521,16 +571,20 @@ export default function AlbumScreen() {
 
       {/* Photo Detail Modal */}
       <Modal visible={!!selectedPhoto} animationType="slide" onRequestClose={closeModal}>
-        {selectedPhoto && (
+        {selectedPhoto && currentPhoto && (
           <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
             {/* Modal header */}
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-              <View style={[styles.modalAvatar, { backgroundColor: selectedPhoto.avatarColor }]}>
-                <Text style={styles.modalAvatarInitial}>{selectedPhoto.initial}</Text>
+              <View style={[styles.modalAvatar, { backgroundColor: getAvatarColor(selectedPhoto.uploadedBy) }]}>
+                <Text style={styles.modalAvatarInitial}>{getInitial(selectedPhoto.uploadedBy)}</Text>
               </View>
               <View style={styles.modalUserInfo}>
-                <Text style={[styles.modalUserName, { color: colors.text }]}>{selectedPhoto.user}</Text>
-                <Text style={[styles.modalTimeAgo, { color: colors.subtext }]}>{selectedPhoto.timeAgo}</Text>
+                <Text style={[styles.modalUserName, { color: colors.text }]}>{selectedPhoto.uploadedBy}</Text>
+                <Text style={[styles.modalTimeAgo, { color: colors.subtext }]}>
+                  {selectedPhoto.takenAt
+                    ? new Date(selectedPhoto.takenAt).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
+                    : '날짜 정보 없음'}
+                </Text>
               </View>
               <TouchableOpacity onPress={closeModal} style={styles.closeBtn}>
                 <Ionicons name="close" size={24} color={colors.text} />
@@ -544,7 +598,8 @@ export default function AlbumScreen() {
             >
               <ScrollView showsVerticalScrollIndicator={false}>
                 {/* Photo */}
-                <View style={[styles.modalPhoto, { backgroundColor: selectedPhoto.color }]}>
+                <View style={styles.modalPhoto}>
+                  <Image source={{ uri: selectedPhoto.url }} style={StyleSheet.absoluteFill} contentFit="cover" />
                   {selectedPhoto.isVideo && (
                     <View style={styles.modalVideoBadge}>
                       <Ionicons name="videocam" size={18} color="#fff" />
@@ -553,26 +608,40 @@ export default function AlbumScreen() {
                   )}
                 </View>
 
-                {/* Actions */}
+                {/* Actions + visibility */}
                 <View style={[styles.actions, { borderBottomColor: colors.border }]}>
                   <TouchableOpacity
                     style={styles.actionBtn}
-                    onPress={() => togglePhotoLike(selectedPhoto.id)}
+                    onPress={() => handleToggleLike(currentPhoto)}
                     activeOpacity={0.7}
                   >
                     <Ionicons
-                      name={photoIsLiked ? 'heart' : 'heart-outline'}
+                      name={currentPhoto.likedByMe ? 'heart' : 'heart-outline'}
                       size={26}
-                      color={photoIsLiked ? '#FF6B8A' : colors.text}
+                      color={currentPhoto.likedByMe ? '#FF6B8A' : colors.text}
                     />
                     <Text style={[styles.actionCount, { color: colors.text }]}>
-                      {photoLikeCounts[selectedPhoto.id] ?? 0}
+                      {currentPhoto.likeCount}
                     </Text>
                   </TouchableOpacity>
                   <View style={styles.actionBtn}>
                     <Ionicons name="chatbubble-outline" size={24} color={colors.text} />
                     <Text style={[styles.actionCount, { color: colors.text }]}>{totalCommentCount}</Text>
                   </View>
+                  <TouchableOpacity
+                    style={[styles.visibilityBadge, { backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0' }]}
+                    onPress={() => handleChangeVisibility(currentPhoto)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons
+                      name={currentPhoto.visibility === 'public' ? 'globe-outline' : currentPhoto.visibility === 'family' ? 'people-outline' : 'lock-closed-outline'}
+                      size={13}
+                      color={colors.subtext}
+                    />
+                    <Text style={[styles.visibilityText, { color: colors.subtext }]}>
+                      {VISIBILITY_LABELS[currentPhoto.visibility]}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
 
                 {/* Comments */}
@@ -584,10 +653,9 @@ export default function AlbumScreen() {
                   ) : (
                     photoComments.map((c) => (
                       <View key={c.id}>
-                        {/* Top-level comment */}
                         <View style={styles.commentRow}>
-                          <View style={[styles.commentAvatar, { backgroundColor: c.avatarColor }]}>
-                            <Text style={styles.commentAvatarInitial}>{c.initial}</Text>
+                          <View style={[styles.commentAvatar, { backgroundColor: getAvatarColor(c.user) }]}>
+                            <Text style={styles.commentAvatarInitial}>{getInitial(c.user)}</Text>
                           </View>
                           <View style={styles.commentBody}>
                             <Text style={[styles.commentUser, { color: colors.text }]}>{c.user}</Text>
@@ -599,49 +667,18 @@ export default function AlbumScreen() {
                               <Text style={[styles.replyTrigger, { color: colors.subtext }]}>답글</Text>
                             </TouchableOpacity>
                           </View>
-                          <TouchableOpacity
-                            style={styles.commentLikeBtn}
-                            onPress={() => toggleCommentLike(selectedPhoto.id, c.id)}
-                          >
-                            <Ionicons
-                              name={c.likedByMe ? 'heart' : 'heart-outline'}
-                              size={14}
-                              color={c.likedByMe ? '#FF6B8A' : colors.subtext}
-                            />
-                            {c.likes > 0 && (
-                              <Text style={[styles.commentLikeCount, { color: colors.subtext }]}>
-                                {c.likes}
-                              </Text>
-                            )}
-                          </TouchableOpacity>
                         </View>
 
-                        {/* Replies */}
                         {c.replies.map((r) => (
                           <View key={r.id} style={styles.replyRow}>
                             <View style={styles.replyIndent} />
-                            <View style={[styles.replyAvatar, { backgroundColor: r.avatarColor }]}>
-                              <Text style={styles.replyAvatarInitial}>{r.initial}</Text>
+                            <View style={[styles.replyAvatar, { backgroundColor: getAvatarColor(r.user) }]}>
+                              <Text style={styles.replyAvatarInitial}>{getInitial(r.user)}</Text>
                             </View>
                             <View style={styles.commentBody}>
                               <Text style={[styles.commentUser, { color: colors.text }]}>{r.user}</Text>
                               <Text style={[styles.commentText, { color: colors.text }]}>{r.text}</Text>
                             </View>
-                            <TouchableOpacity
-                              style={styles.commentLikeBtn}
-                              onPress={() => toggleReplyLike(selectedPhoto.id, c.id, r.id)}
-                            >
-                              <Ionicons
-                                name={r.likedByMe ? 'heart' : 'heart-outline'}
-                                size={13}
-                                color={r.likedByMe ? '#FF6B8A' : colors.subtext}
-                              />
-                              {r.likes > 0 && (
-                                <Text style={[styles.commentLikeCount, { color: colors.subtext }]}>
-                                  {r.likes}
-                                </Text>
-                              )}
-                            </TouchableOpacity>
                           </View>
                         ))}
                       </View>
@@ -650,7 +687,6 @@ export default function AlbumScreen() {
                 </View>
               </ScrollView>
 
-              {/* Reply target banner */}
               {replyingTo && (
                 <View
                   style={[
@@ -667,7 +703,6 @@ export default function AlbumScreen() {
                 </View>
               )}
 
-              {/* Comment input */}
               <View
                 style={[
                   styles.inputBar,
@@ -746,7 +781,7 @@ const styles = StyleSheet.create({
   monthDot: { width: 4, height: 4, borderRadius: 2 },
 
   // Hero
-  heroPhoto: { width, height: width },
+  heroPhoto: { width, height: width, backgroundColor: '#E0E0E0', overflow: 'hidden' },
   heroVideoBadge: {
     position: 'absolute', top: 14, right: 14,
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -784,6 +819,7 @@ const styles = StyleSheet.create({
   photoItem: {
     width: PHOTO_SIZE, height: PHOTO_SIZE,
     justifyContent: 'flex-end', alignItems: 'flex-start', padding: 5,
+    backgroundColor: '#E0E0E0', overflow: 'hidden',
   },
   videoBadge: { backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 4, padding: 4 },
   gridLikeBadge: {
@@ -794,9 +830,15 @@ const styles = StyleSheet.create({
   gridLikeCount: { color: '#fff', fontSize: 10, fontWeight: '600' },
 
   // Empty
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, paddingBottom: 60 },
-  emptyText: { fontSize: 17, fontWeight: '600', marginTop: 4 },
-  emptySubtext: { fontSize: 14 },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingBottom: 120,
+    gap: 8,
+  },
+  emptyText: { fontSize: 16, fontWeight: '600' },
+  emptyGuide: { fontSize: 14, textAlign: 'center', lineHeight: 22 },
 
   // Modal
   modal: { flex: 1 },
@@ -811,12 +853,11 @@ const styles = StyleSheet.create({
   modalUserName: { fontSize: 15, fontWeight: '600' },
   modalTimeAgo: { fontSize: 12, marginTop: 1 },
   closeBtn: { padding: 4 },
-  modalPhoto: { width, height: width },
+  modalPhoto: { width, height: width, backgroundColor: '#E0E0E0', overflow: 'hidden' },
   modalVideoBadge: {
     position: 'absolute',
     alignSelf: 'center' as const,
     top: width / 2 - 18,
-    transform: [{ translateX: 0 }],
     flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8,
     paddingHorizontal: 12, paddingVertical: 6,
@@ -828,6 +869,11 @@ const styles = StyleSheet.create({
   },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   actionCount: { fontSize: 15, fontWeight: '500' },
+  visibilityBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, marginLeft: 'auto',
+  },
+  visibilityText: { fontSize: 12, fontWeight: '500' },
 
   // Comments
   commentsSection: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 8, gap: 18 },
@@ -845,7 +891,6 @@ const styles = StyleSheet.create({
   commentLikeBtn: { alignItems: 'center', gap: 2, paddingLeft: 4, flexShrink: 0 },
   commentLikeCount: { fontSize: 11 },
 
-  // Replies (indented)
   replyRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginTop: 10 },
   replyIndent: { width: 20 },
   replyAvatar: {
@@ -854,7 +899,6 @@ const styles = StyleSheet.create({
   },
   replyAvatarInitial: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
-  // Reply banner
   replyBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 8,
@@ -862,7 +906,6 @@ const styles = StyleSheet.create({
   },
   replyBannerText: { fontSize: 13 },
 
-  // Input
   inputBar: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 16, paddingVertical: 10,
