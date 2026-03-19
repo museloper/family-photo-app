@@ -74,7 +74,6 @@ const VISIBILITY_LABELS: Record<string, string> = {
   family: '가족 공개',
   private: '비공개',
 };
-const VISIBILITY_ORDER: Array<'public' | 'family' | 'private'> = ['public', 'family', 'private'];
 
 function getAvatarColor(name: string): string {
   const colors = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA'];
@@ -223,6 +222,7 @@ export default function AlbumScreen() {
 
   // Modal / interaction state
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [visibilityPickerPhoto, setVisibilityPickerPhoto] = useState<Photo | null>(null);
   const [allComments, setAllComments] = useState<Record<string, Comment[]>>({});
   const [commentInput, setCommentInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ commentId: string; userName: string } | null>(null);
@@ -270,10 +270,9 @@ export default function AlbumScreen() {
     }
   };
 
-  const handleChangeVisibility = async (photo: Photo) => {
+  const handleChangeVisibility = async (photo: Photo, next: 'public' | 'family' | 'private') => {
     if (!session) return;
-    const nextIdx = (VISIBILITY_ORDER.indexOf(photo.visibility) + 1) % VISIBILITY_ORDER.length;
-    const next = VISIBILITY_ORDER[nextIdx];
+    setVisibilityPickerPhoto(null);
     setPhotos((prev) => prev.map((p) => p.id === photo.id ? { ...p, visibility: next } : p));
     try {
       await updateVisibility(photo.id, session.token, next);
@@ -630,7 +629,7 @@ export default function AlbumScreen() {
                   </View>
                   <TouchableOpacity
                     style={[styles.visibilityBadge, { backgroundColor: isDark ? '#2A2A2A' : '#F0F0F0' }]}
-                    onPress={() => handleChangeVisibility(currentPhoto)}
+                    onPress={() => setVisibilityPickerPhoto(currentPhoto)}
                     activeOpacity={0.75}
                   >
                     <Ionicons
@@ -740,6 +739,46 @@ export default function AlbumScreen() {
             </KeyboardAvoidingView>
           </SafeAreaView>
         )}
+      </Modal>
+
+      {/* Visibility Picker */}
+      <Modal
+        visible={!!visibilityPickerPhoto}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setVisibilityPickerPhoto(null)}
+      >
+        <TouchableOpacity
+          style={styles.visPickerOverlay}
+          activeOpacity={1}
+          onPress={() => setVisibilityPickerPhoto(null)}
+        >
+          <View style={[styles.visPickerSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.visPickerTitle, { color: colors.subtext }]}>공개 범위 선택</Text>
+            {([
+              { key: 'public',  icon: 'globe-outline',       label: '전체 공개',  desc: '앱을 사용하는 누구나 볼 수 있어요' },
+              { key: 'family',  icon: 'people-outline',      label: '가족 공개',  desc: '앨범에 초대된 가족만 볼 수 있어요' },
+              { key: 'private', icon: 'lock-closed-outline', label: '비공개',     desc: '나만 볼 수 있어요' },
+            ] as const).map(({ key, icon, label, desc }) => {
+              const isSelected = visibilityPickerPhoto?.visibility === key;
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[styles.visPickerRow, isSelected && { backgroundColor: colors.tint + '18' }]}
+                  onPress={() => visibilityPickerPhoto && handleChangeVisibility(visibilityPickerPhoto, key)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name={icon} size={20} color={isSelected ? colors.tint : colors.subtext} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.visPickerLabel, { color: isSelected ? colors.tint : colors.text }]}>{label}</Text>
+                    <Text style={[styles.visPickerDesc, { color: colors.subtext }]}>{desc}</Text>
+                  </View>
+                  {isSelected && <Ionicons name="checkmark" size={18} color={colors.tint} />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );
@@ -917,4 +956,12 @@ const styles = StyleSheet.create({
     borderRadius: 22, fontSize: 14, borderWidth: StyleSheet.hairlineWidth,
   },
   sendBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+
+  // Visibility picker
+  visPickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 32 },
+  visPickerSheet: { width: '100%', borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', paddingTop: 4 },
+  visPickerTitle: { fontSize: 12, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase', paddingHorizontal: 20, paddingVertical: 14 },
+  visPickerRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 14 },
+  visPickerLabel: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  visPickerDesc: { fontSize: 12 },
 });
