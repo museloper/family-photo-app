@@ -32,8 +32,13 @@ export default function InvitedScreen() {
 
   const handleBarcodeScanned = ({ data }: { data: string }) => {
     setShowCamera(false);
-    // TODO: 링크 파싱 후 앨범 참여 처리
-    Alert.alert('QR 코드 인식 완료', `앨범 링크: ${data}`);
+    // URL에서 invite 토큰 파싱: .../invite/{token}
+    const match = data.match(/\/invite\/([a-f0-9]+)/);
+    if (match) {
+      router.push(`/invite/${match[1]}` as any);
+    } else {
+      Alert.alert('인식 실패', '올바른 초대 QR 코드가 아닙니다.');
+    }
   };
 
   if (showCamera) {

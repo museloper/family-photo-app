@@ -172,6 +172,7 @@ export type ApiMember = {
   id: number;
   name: string;
   role: 'admin' | 'member';
+  display_role: string;
   joined_at: string;
   is_creator: boolean;
 };
@@ -208,6 +209,49 @@ export function updateMemberRoleApi(albumId: number, memberId: number, role: 'ad
     method: 'PUT',
     body: JSON.stringify({ role }),
   }, token);
+}
+
+// ─── Invite ───────────────────────────────────────────────────────────────────
+
+export type InviteInfo = {
+  albumId: number;
+  albumName: string;
+  babyName: string;
+  birthDate: string;
+  color: string;
+  invitedRole: string;
+  albumRole: 'admin' | 'member';
+};
+
+export type JoinInviteResponse = {
+  token: string;
+  user: { id: number; name: string };
+  album: { id: number; name: string; baby_name: string; birth_date: string };
+  invitedRole: string;
+};
+
+export function createInvite(
+  albumId: number,
+  token: string,
+  invitedRole: string,
+  albumRole: 'admin' | 'member',
+) {
+  return request<{ token: string }>(
+    `/albums/${albumId}/invite`,
+    { method: 'POST', body: JSON.stringify({ invitedRole, albumRole }) },
+    token,
+  );
+}
+
+export function getInviteInfo(inviteToken: string) {
+  return request<InviteInfo>(`/invite/${inviteToken}`);
+}
+
+export function joinViaInvite(inviteToken: string, nickname: string) {
+  return request<JoinInviteResponse>(`/invite/${inviteToken}/join`, {
+    method: 'POST',
+    body: JSON.stringify({ nickname }),
+  });
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────

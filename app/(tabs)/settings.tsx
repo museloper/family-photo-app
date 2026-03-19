@@ -1,4 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from 'expo-clipboard';
+import * as Linking from 'expo-linking';
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useState } from "react";
 import {
@@ -7,6 +9,7 @@ import {
   Modal,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -14,6 +17,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import QRCode from 'react-native-qrcode-svg';
 
 import { Colors } from "@/constants/theme";
 import { Album, MemberRole, useAlbums } from "@/contexts/AlbumContext";
@@ -21,11 +25,28 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import {
   ApiAlbum, ApiError, ApiMember,
-  createAlbum, deleteAlbumApi, getAlbums, getMembers,
+  createAlbum, createInvite, deleteAlbumApi, getAlbums, getMembers,
   removeMember, updateAlbumApi, updateMemberRoleApi,
 } from "@/services/api";
 
 const MEMBER_AVATAR_COLORS = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA', '#00CEC9'];
+
+const DISPLAY_ROLE_LABELS: Record<string, string> = {
+  mom:        '엄마',
+  dad:        '아빠',
+  grandpa:    '할아버지',
+  grandma:    '할머니',
+  uncle_aunt: '외숙부모/이모·부',
+  relative:   '백부모/숙부모/고모·부',
+  baby:       '아기',
+  other:      '가족',
+  admin:      '관리자',   // display_role 마이그레이션 전 기존 데이터 대비
+  member:     '멤버',
+};
+
+function displayRoleLabel(member: { role: string; display_role: string }): string {
+  return DISPLAY_ROLE_LABELS[member.display_role] ?? DISPLAY_ROLE_LABELS[member.role] ?? '가족';
+}
 function memberAvatarColor(name: string): string {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
@@ -260,99 +281,6 @@ function AlbumFormModal({ visible, editing, onClose, onSave, colors, isDark }: A
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Invite Modal ─────────────────────────────────────────────────────────────
-type InviteModalProps = {
-  visible: boolean;
-  albumName: string;
-  onClose: () => void;
-  onInvite: (name: string, role: MemberRole) => void;
-  colors: (typeof Colors)["light"];
-  isDark: boolean;
-};
-
-function InviteModal({ visible, albumName, onClose, onInvite, colors, isDark }: InviteModalProps) {
-  const [name, setName] = useState("");
-  const [role, setRole] = useState<MemberRole>("member");
-
-  React.useEffect(() => {
-    if (visible) { setName(""); setRole("member"); }
-  }, [visible]);
-
-  const isValid = name.trim().length > 0;
-
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
-          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Text style={[styles.modalCancel, { color: colors.subtext }]}>취소</Text>
-            </TouchableOpacity>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>멤버 초대</Text>
-            <TouchableOpacity
-              onPress={() => isValid && onInvite(name.trim(), role)}
-              disabled={!isValid}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={[styles.modalSave, { color: isValid ? colors.tint : colors.border }]}>초대</Text>
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-            <View style={styles.section}>
-              <Text style={[styles.inviteAlbumLabel, { color: colors.subtext }]}>
-                {albumName}에 초대합니다
-              </Text>
-
-              <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={styles.inputRow}>
-                  <Text style={[styles.inputLabel, { color: colors.subtext }]}>이름</Text>
-                  <TextInput
-                    style={[styles.input, { color: colors.text, backgroundColor: isDark ? "#1A1A1A" : "#F5F5F5", borderColor: colors.border }]}
-                    value={name}
-                    onChangeText={setName}
-                    placeholder="초대할 멤버 이름"
-                    placeholderTextColor={colors.subtext}
-                    returnKeyType="done"
-                    autoFocus
-                  />
-                </View>
-              </View>
-
-              {/* Role picker */}
-              <Text style={[styles.sectionTitle, { color: colors.subtext, marginTop: 20 }]}>역할</Text>
-              <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {(["admin", "member"] as MemberRole[]).map((r, idx) => (
-                  <React.Fragment key={r}>
-                    <TouchableOpacity
-                      style={styles.roleRow}
-                      onPress={() => setRole(r)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.roleInfo}>
-                        <Text style={[styles.roleName, { color: colors.text }]}>
-                          {r === "admin" ? "관리자" : "일반 멤버"}
-                        </Text>
-                        <Text style={[styles.roleDesc, { color: colors.subtext }]}>
-                          {r === "admin"
-                            ? "멤버 초대·삭제, 앨범 편집 가능"
-                            : "사진 업로드 및 댓글 작성 가능"}
-                        </Text>
-                      </View>
-                      <View style={[styles.radioOuter, { borderColor: role === r ? colors.tint : colors.border }]}>
-                        {role === r && <View style={[styles.radioInner, { backgroundColor: colors.tint }]} />}
-                      </View>
-                    </TouchableOpacity>
-                    {idx === 0 && <View style={[styles.rowDivider, { backgroundColor: colors.border, marginLeft: 16 }]} />}
-                  </React.Fragment>
-                ))}
-              </View>
-            </View>
-          </ScrollView>
-        </SafeAreaView>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function SettingsScreen() {
@@ -363,11 +291,70 @@ export default function SettingsScreen() {
   const { session, clearSession, switchAlbum } = useAuth();
   const { addNotification } = useAlbums();
 
+  // ─── 초대 모달 ────────────────────────────────────────────────────────────────
+  type InviteStep = 'roleType' | 'role' | 'share';
+  type InviteRoleType = 'admin' | 'member';
+
+  const ADMIN_ROLES = [
+    { key: 'mom', label: '엄마', emoji: '👩' },
+    { key: 'dad', label: '아빠', emoji: '👨' },
+  ] as const;
+  const MEMBER_ROLES = [
+    { key: 'grandpa',   label: '할아버지',           emoji: '👴' },
+    { key: 'grandma',   label: '할머니',             emoji: '👵' },
+    { key: 'uncle_aunt',label: '외숙부모 / 이모·부',  emoji: '🧑‍🤝‍🧑' },
+    { key: 'relative',  label: '백부모 / 숙부모 / 고모·부', emoji: '👨‍👩‍👧' },
+    { key: 'baby',      label: '아기',               emoji: '👶' },
+    { key: 'other',     label: '그 외 가족',          emoji: '🏠' },
+  ] as const;
+
+  const [inviteVisible, setInviteVisible] = useState(false);
+  const [inviteStep, setInviteStep] = useState<InviteStep>('roleType');
+  const [inviteRoleType, setInviteRoleType] = useState<InviteRoleType | null>(null);
+  const [inviteRole, setInviteRole] = useState<string | null>(null);
+  const [inviteToken, setInviteToken] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+
+  const inviteUrl = inviteToken ? Linking.createURL(`invite/${inviteToken}`) : '';
+
+  const openInviteModal = () => {
+    setInviteStep('roleType');
+    setInviteRoleType(null);
+    setInviteRole(null);
+    setInviteToken('');
+    setInviteVisible(true);
+  };
+
+  const handleGenerateInvite = async (roleKey: string, albumRole: 'admin' | 'member') => {
+    if (!session) return;
+    setInviteRole(roleKey);
+    setInviteLoading(true);
+    setInviteStep('share');
+    try {
+      const res = await createInvite(session.albumId, session.token, roleKey, albumRole);
+      setInviteToken(res.token);
+    } catch (e) {
+      Alert.alert('오류', e instanceof Error ? e.message : '초대 링크 생성에 실패했습니다');
+      setInviteStep('role');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
+  const shareMessage = `${session?.babyName ?? '아기'}의 가족 앨범에 초대합니다!\n아래 링크로 참여해주세요:\n${inviteUrl}`;
+
+  const handleShareKakao = () => Share.share({ message: shareMessage });
+  const handleShareSMS = () => Linking.openURL(`sms:?body=${encodeURIComponent(shareMessage)}`);
+  const handleShareEmail = () => Linking.openURL(`mailto:?subject=${encodeURIComponent('가족 앨범 초대')}&body=${encodeURIComponent(shareMessage)}`);
+  const handleCopyLink = async () => {
+    await Clipboard.setStringAsync(inviteUrl);
+    Alert.alert('복사 완료', '초대 링크가 클립보드에 복사되었습니다');
+  };
+
   // ─── 앨범 목록 (API) ─────────────────────────────────────────────────────────
   const [apiAlbums, setApiAlbums] = useState<ApiAlbum[]>([]);
   const [editingApiAlbum, setEditingApiAlbum] = useState<ApiAlbum | null>(null);
   const [albumFormVisible, setAlbumFormVisible] = useState(false);
-  const [inviteVisible, setInviteVisible] = useState(false);
 
   const fetchAlbums = useCallback(async () => {
     if (!session) return;
@@ -525,9 +512,7 @@ export default function SettingsScreen() {
 
         {/* ── Members ── */}
         <View style={styles.section}>
-          <View style={styles.memberSectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.subtext, marginBottom: 0 }]}>함께하는 멤버</Text>
-          </View>
+          <Text style={[styles.sectionTitle, { color: colors.subtext }]}>함께하는 멤버</Text>
 
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {apiMembers.length === 0 ? (
@@ -564,13 +549,13 @@ export default function SettingsScreen() {
                         >
                           <View style={styles.roleChipRow}>
                             <Text style={[styles.roleBadge, { color: member.role === "admin" ? colors.tint : colors.subtext }]}>
-                              {member.role === "admin" ? "관리자" : "일반 멤버"}
+                              {displayRoleLabel(member)}
                             </Text>
                             {!isMe && <Ionicons name="chevron-down" size={11} color={colors.subtext} />}
                           </View>
                         </TouchableOpacity>
                       ) : (
-                        <Text style={[styles.roleBadge, { color: colors.tint }]}>관리자 (생성자)</Text>
+                        <Text style={[styles.roleBadge, { color: colors.tint }]}>{displayRoleLabel(member)} (생성자)</Text>
                       )}
                     </View>
                     {!isMe && !member.is_creator && (
@@ -603,6 +588,131 @@ export default function SettingsScreen() {
         colors={colors}
         isDark={isDark}
       />
+
+      {/* ── 초대 모달 ── */}
+      <Modal visible={inviteVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setInviteVisible(false)}>
+        <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity
+              onPress={() => {
+                if (inviteStep === 'role') setInviteStep('roleType');
+                else if (inviteStep === 'share') setInviteStep('role');
+                else setInviteVisible(false);
+              }}
+              style={{ width: 60 }}
+            >
+              <Text style={[styles.modalCancel, { color: colors.subtext }]}>
+                {inviteStep === 'roleType' ? '닫기' : '이전'}
+              </Text>
+            </TouchableOpacity>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>멤버 초대</Text>
+            <View style={{ width: 60 }} />
+          </View>
+
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40 }}>
+
+            {/* ── Step 1: 역할 유형 선택 ── */}
+            {inviteStep === 'roleType' && (
+              <>
+                <Text style={[styles.inviteStepTitle, { color: colors.text }]}>어떤 역할로{'\n'}초대할까요?</Text>
+                <View style={styles.inviteTypeRow}>
+                  <TouchableOpacity
+                    style={[styles.inviteTypeCard, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}
+                    onPress={() => { setInviteRoleType('admin'); setInviteStep('role'); }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.inviteTypeEmoji}>👑</Text>
+                    <Text style={[styles.inviteTypeLabel, { color: colors.text }]}>앨범 관리자</Text>
+                    <Text style={[styles.inviteTypeDesc, { color: colors.subtext }]}>앨범 편집 권한 포함</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.inviteTypeCard, { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 }]}
+                    onPress={() => { setInviteRoleType('member'); setInviteStep('role'); }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.inviteTypeEmoji}>👪</Text>
+                    <Text style={[styles.inviteTypeLabel, { color: colors.text }]}>일반 멤버</Text>
+                    <Text style={[styles.inviteTypeDesc, { color: colors.subtext }]}>사진 보기 및 댓글</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+
+            {/* ── Step 2: 구체적 역할 선택 ── */}
+            {inviteStep === 'role' && (
+              <>
+                <Text style={[styles.inviteStepTitle, { color: colors.text }]}>
+                  {inviteRoleType === 'admin' ? '관리자 역할을\n선택해주세요' : '가족 관계를\n선택해주세요'}
+                </Text>
+                <View style={styles.roleGrid}>
+                  {(inviteRoleType === 'admin' ? ADMIN_ROLES : MEMBER_ROLES).map((r) => (
+                    <TouchableOpacity
+                      key={r.key}
+                      style={[styles.roleGridCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                      onPress={() => handleGenerateInvite(r.key, inviteRoleType === 'admin' ? 'admin' : 'member')}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.roleGridEmoji}>{r.emoji}</Text>
+                      <Text style={[styles.roleGridLabel, { color: colors.text }]}>{r.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
+
+            {/* ── Step 3: 공유 ── */}
+            {inviteStep === 'share' && (
+              <>
+                <Text style={[styles.inviteStepTitle, { color: colors.text }]}>초대 링크가{'\n'}생성됐어요!</Text>
+                <Text style={[{ color: colors.subtext, fontSize: 14, marginBottom: 24, lineHeight: 20 }]}>
+                  아래 방법으로 가족에게 공유하세요 (7일간 유효)
+                </Text>
+
+                {inviteLoading || !inviteUrl ? (
+                  <View style={{ alignItems: 'center', paddingVertical: 40, gap: 12 }}>
+                    <Ionicons name="hourglass-outline" size={36} color={colors.subtext} />
+                    <Text style={{ color: colors.subtext }}>링크 생성 중...</Text>
+                  </View>
+                ) : (
+                  <>
+                    {/* QR 코드 */}
+                    <View style={[styles.qrBox, { backgroundColor: '#fff', alignSelf: 'center' }]}>
+                      <QRCode value={inviteUrl} size={180} backgroundColor="#fff" color="#000" />
+                    </View>
+
+                    {/* 링크 + 복사 */}
+                    <TouchableOpacity
+                      style={[styles.linkBox, { backgroundColor: isDark ? '#1A1A1A' : '#F5F5F5', borderColor: colors.border }]}
+                      onPress={handleCopyLink}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.linkText, { color: colors.text, flex: 1 }]} numberOfLines={1}>{inviteUrl}</Text>
+                      <Ionicons name="copy-outline" size={16} color={colors.subtext} />
+                    </TouchableOpacity>
+
+                    {/* 공유 버튼 3종 */}
+                    <Text style={[{ color: colors.subtext, fontSize: 13, marginTop: 20, marginBottom: 12 }]}>공유 방법 선택</Text>
+                    <View style={styles.shareRow}>
+                      <TouchableOpacity style={[styles.shareBtn, { backgroundColor: '#FEE500' }]} onPress={handleShareKakao}>
+                        <Text style={styles.shareBtnIcon}>💬</Text>
+                        <Text style={[styles.shareBtnLabel, { color: '#3C1E1E' }]}>카카오톡</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.shareBtn, { backgroundColor: '#34C759' }]} onPress={handleShareSMS}>
+                        <Ionicons name="chatbubble-outline" size={22} color="#fff" />
+                        <Text style={[styles.shareBtnLabel, { color: '#fff' }]}>문자</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.shareBtn, { backgroundColor: '#007AFF' }]} onPress={handleShareEmail}>
+                        <Ionicons name="mail-outline" size={22} color="#fff" />
+                        <Text style={[styles.shareBtnLabel, { color: '#fff' }]}>이메일</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+              </>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
       {/* Role change confirmation modal */}
       <Modal
@@ -662,15 +772,6 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
-      {/* Invite modal */}
-      <InviteModal
-        visible={inviteVisible}
-        albumName={apiAlbums.find((a) => a.id === session?.albumId)?.name ?? '앨범'}
-        onClose={() => setInviteVisible(false)}
-        onInvite={() => setInviteVisible(false)}
-        colors={colors}
-        isDark={isDark}
-      />
     </SafeAreaView>
   );
 }
@@ -708,7 +809,26 @@ const styles = StyleSheet.create({
   outlineButtonText: { fontSize: 15, fontWeight: "600" },
 
   // Members section
-  memberSectionHeader: { marginBottom: 10 },
+  memberSectionHeader: { marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  inviteHeaderBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14 },
+  inviteHeaderBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  inviteStepTitle: { fontSize: 24, fontWeight: '700', lineHeight: 32, marginBottom: 24 },
+  inviteTypeRow: { flexDirection: 'row', gap: 14 },
+  inviteTypeCard: { flex: 1, borderRadius: 16, padding: 20, alignItems: 'center', gap: 8 },
+  inviteTypeEmoji: { fontSize: 36 },
+  inviteTypeLabel: { fontSize: 15, fontWeight: '700' },
+  inviteTypeDesc: { fontSize: 12, textAlign: 'center' },
+  roleGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  roleGridCard: { width: '47%', borderRadius: 14, borderWidth: 1, padding: 18, alignItems: 'center', gap: 8 },
+  roleGridEmoji: { fontSize: 32 },
+  roleGridLabel: { fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  qrBox: { padding: 20, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, marginBottom: 16 },
+  linkBox: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 12, padding: 14 },
+  linkText: { fontSize: 13, lineHeight: 18 },
+  shareRow: { flexDirection: 'row', gap: 12 },
+  shareBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 16, borderRadius: 16 },
+  shareBtnIcon: { fontSize: 22 },
+  shareBtnLabel: { fontSize: 13, fontWeight: '700' },
   memberAlbumTabs: { paddingHorizontal: 4, gap: 0, marginTop: 8 },
   memberAlbumTab: { paddingHorizontal: 4, paddingVertical: 6, marginRight: 16 },
   memberAlbumTabText: { fontSize: 13, fontWeight: "600" },

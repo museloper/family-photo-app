@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import { guestRegister } from '@/services/api';
+import { guestRegister, joinViaInvite } from '@/services/api';
 
 // 웹은 SecureStore 미지원 → localStorage 폴백
 const storage = {
@@ -35,6 +35,7 @@ type AuthContextType = {
   session: GuestSession | null;
   isLoading: boolean;
   createGuestSession: (data: Pick<GuestSession, 'nickname' | 'role' | 'babyName' | 'babyBirth'>) => Promise<void>;
+  joinViaInviteSession: (inviteToken: string, nickname: string) => Promise<void>;
   switchAlbum: (albumId: number, babyName: string, babyBirth: string) => Promise<void>;
   clearSession: () => Promise<void>;
 };
@@ -89,6 +90,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(newSession);
   }
 
+  async function joinViaInviteSession(inviteToken: string, nickname: string) {
+    const res = await joinViaInvite(inviteToken, nickname);
+    const newSession: GuestSession = {
+      userId: res.user.id,
+      albumId: res.album.id,
+      token: res.token,
+      nickname,
+      role: (res.invitedRole === 'mom' || res.invitedRole === 'dad' ? res.invitedRole : 'mom') as UserRole,
+      babyName: res.album.baby_name,
+      babyBirth: res.album.birth_date,
+    };
+    await storage.set(SESSION_KEY, JSON.stringify(newSession));
+    setSession(newSession);
+  }
+
   async function switchAlbum(albumId: number, babyName: string, babyBirth: string) {
     if (!session) return;
     const updated = { ...session, albumId, babyName, babyBirth };
@@ -102,7 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, isLoading, createGuestSession, switchAlbum, clearSession }}>
+    <AuthContext.Provider value={{ session, isLoading, createGuestSession, joinViaInviteSession, switchAlbum, clearSession }}>
       {children}
     </AuthContext.Provider>
   );
