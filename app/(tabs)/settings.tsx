@@ -2,6 +2,8 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import { useFocusEffect } from "expo-router";
+import * as ImagePicker from 'expo-image-picker';
+import { Image } from 'expo-image';
 import React, { useCallback, useState } from "react";
 import {
   Alert,
@@ -24,9 +26,9 @@ import { Album, MemberRole, useAlbums } from "@/contexts/AlbumContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import {
-  ApiAlbum, ApiError, ApiMember,
+  ApiAlbum, ApiError, ApiMember, FILE_BASE,
   createAlbum, createInvite, deleteAlbumApi, getAlbums, getMembers,
-  removeMember, updateAlbumApi, updateMemberRoleApi,
+  removeMember, updateAlbumApi, updateMemberRoleApi, uploadAlbumAvatar,
 } from "@/services/api";
 
 const MEMBER_AVATAR_COLORS = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA', '#00CEC9'];
@@ -288,7 +290,56 @@ export default function SettingsScreen() {
   const colors = Colors[colorScheme ?? "light"];
   const isDark = colorScheme === "dark";
 
-  const { session, clearSession, switchAlbum } = useAuth();
+  const { session, clearSession, switchAlbum, updateNickname, updateAvatar } = useAuth();
+
+  // ─── 프로필 모달 ──────────────────────────────────────────────────────────────
+  const [profileVisible, setProfileVisible] = useState(false);
+  const [profileNickname, setProfileNickname] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+
+  const [profileAvatarUri, setProfileAvatarUri] = useState<string | null>(null);
+
+  const openProfileModal = () => {
+    setProfileNickname(session?.nickname ?? '');
+    setProfileAvatarUri(null);
+    setProfileVisible(true);
+  };
+
+  const handlePickAvatar = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('권한 필요', '사진 라이브러리 접근 권한이 필요합니다');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setProfileAvatarUri(result.assets[0].uri);
+    }
+  };
+
+  const handleProfileSave = async () => {
+    if (!profileNickname.trim()) return;
+    setProfileSaving(true);
+    try {
+      if (profileAvatarUri) {
+        const fileName = `avatar_${Date.now()}.jpg`;
+        await updateAvatar(profileAvatarUri, 'image/jpeg', fileName);
+      }
+      if (profileNickname.trim() !== session?.nickname) {
+        await updateNickname(profileNickname.trim());
+      }
+      setProfileVisible(false);
+    } catch (e) {
+      Alert.alert('오류', e instanceof Error ? e.message : '저장에 실패했습니다');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
   const { addNotification } = useAlbums();
 
   // ─── 초대 모달 ────────────────────────────────────────────────────────────────
@@ -414,6 +465,28 @@ export default function SettingsScreen() {
     }
   };
 
+  const handlePickAlbumAvatar = async (albumId: number) => {
+    if (!session) return;
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('권한 필요', '사진 라이브러리 접근 권한이 필요합니다');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    try {
+      await uploadAlbumAvatar(albumId, session.token, result.assets[0].uri, 'image/jpeg', `album_avatar_${Date.now()}.jpg`);
+      await fetchAlbums();
+    } catch (e) {
+      Alert.alert('오류', e instanceof Error ? e.message : '업로드에 실패했습니다');
+    }
+  };
+
   const handleDeleteAlbum = (albumId: number) => {
     if (!session) return;
     Alert.alert("앨범 삭제", "이 앨범을 삭제하시겠어요?", [
@@ -449,6 +522,28 @@ export default function SettingsScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
+        {/* ── Profile ── */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.subtext }]}>내 프로필</Text>
+          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <TouchableOpacity style={styles.memberRow} onPress={openProfileModal} activeOpacity={0.7}>
+              <View style={[styles.memberAvatar, { backgroundColor: memberAvatarColor(session?.nickname ?? '') }]}>
+                {session?.avatarUrl
+                  ? <Image source={{ uri: FILE_BASE + session.avatarUrl }} style={{ width: 44, height: 44, borderRadius: 22 }} />
+                  : <Text style={styles.memberAvatarInitial}>{(session?.nickname ?? '?').charAt(0)}</Text>
+                }
+              </View>
+              <View style={styles.memberInfo}>
+                <Text style={[styles.memberName, { color: colors.text }]}>{session?.nickname}</Text>
+                <Text style={[styles.roleBadge, { color: colors.subtext }]}>
+                  {DISPLAY_ROLE_LABELS[session?.role ?? ''] ?? '가족'}
+                </Text>
+              </View>
+              <Ionicons name="pencil-outline" size={17} color={colors.subtext} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* ── Albums ── */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.subtext }]}>앨범</Text>
@@ -463,9 +558,23 @@ export default function SettingsScreen() {
               return (
                 <React.Fragment key={album.id}>
                   <View style={styles.albumRow}>
-                    <View style={[styles.albumAvatar, { backgroundColor: album.color }]}>
-                      <Text style={styles.albumAvatarInitial}>{album.baby_name[0]}</Text>
-                    </View>
+                    <TouchableOpacity
+                      onPress={() => album.role === 'admin' && handlePickAlbumAvatar(album.id)}
+                      activeOpacity={album.role === 'admin' ? 0.7 : 1}
+                      style={{ position: 'relative' }}
+                    >
+                      <View style={[styles.albumAvatar, { backgroundColor: album.color }]}>
+                        {album.avatar_url
+                          ? <Image source={{ uri: FILE_BASE + album.avatar_url }} style={{ width: 44, height: 44, borderRadius: 22 }} />
+                          : <Text style={styles.albumAvatarInitial}>{album.baby_name[0]}</Text>
+                        }
+                      </View>
+                      {album.role === 'admin' && (
+                        <View style={[styles.avatarPickerBadge, { backgroundColor: colors.tint }]}>
+                          <Ionicons name="camera" size={10} color="#fff" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
                     <View style={styles.albumInfo}>
                       <View style={styles.albumNameRow}>
                         <Text style={[styles.albumName, { color: colors.text }]}>{album.name}</Text>
@@ -526,7 +635,10 @@ export default function SettingsScreen() {
                 <React.Fragment key={member.id}>
                   <View style={styles.memberRow}>
                     <View style={[styles.memberAvatar, { backgroundColor: color }]}>
-                      <Text style={styles.memberAvatarInitial}>{member.name.charAt(0)}</Text>
+                      {member.avatar_url
+                        ? <Image source={{ uri: FILE_BASE + member.avatar_url }} style={{ width: 44, height: 44, borderRadius: 22 }} />
+                        : <Text style={styles.memberAvatarInitial}>{member.name.charAt(0)}</Text>
+                      }
                     </View>
                     <View style={styles.memberInfo}>
                       <View style={styles.memberNameRow}>
@@ -578,6 +690,49 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Profile modal */}
+      <Modal visible={profileVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setProfileVisible(false)}>
+        <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+            <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+              <TouchableOpacity onPress={() => setProfileVisible(false)} style={{ width: 60 }}>
+                <Text style={[styles.modalCancel, { color: colors.subtext }]}>취소</Text>
+              </TouchableOpacity>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>프로필 수정</Text>
+              <TouchableOpacity onPress={handleProfileSave} disabled={profileSaving} style={{ width: 60, alignItems: 'flex-end' }}>
+                <Text style={[styles.modalSave, { color: profileSaving ? colors.subtext : colors.tint }]}>저장</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ paddingHorizontal: 20, paddingTop: 28 }}>
+              {/* 아바타 선택 */}
+              <View style={{ alignItems: 'center', marginBottom: 28 }}>
+                <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.8} style={styles.avatarPickerWrap}>
+                  <View style={[styles.avatarPickerCircle, { backgroundColor: memberAvatarColor(session?.nickname ?? '') }]}>
+                    {(profileAvatarUri ?? session?.avatarUrl)
+                      ? <Image source={{ uri: profileAvatarUri ?? (FILE_BASE + session?.avatarUrl!) }} style={{ width: 80, height: 80, borderRadius: 40 }} />
+                      : <Text style={styles.avatarPickerInitial}>{(session?.nickname ?? '?').charAt(0)}</Text>
+                    }
+                  </View>
+                  <View style={[styles.avatarPickerBadge, { backgroundColor: colors.tint }]}>
+                    <Ionicons name="camera" size={14} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.inputLabel, { color: colors.subtext, marginBottom: 8 }]}>닉네임</Text>
+              <TextInput
+                style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.card }]}
+                value={profileNickname}
+                onChangeText={setProfileNickname}
+                placeholder="닉네임 입력"
+                placeholderTextColor={colors.subtext}
+                maxLength={20}
+              />
+            </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </Modal>
 
       {/* Album form modal */}
       <AlbumFormModal
@@ -842,6 +997,12 @@ const styles = StyleSheet.create({
   meBadgeText: { fontSize: 12, fontWeight: "500" },
   roleChipRow: { flexDirection: "row", alignItems: "center", gap: 3 },
   roleBadge: { fontSize: 12, fontWeight: "500" },
+
+  // Avatar picker
+  avatarPickerWrap: { position: 'relative', width: 80, height: 80 },
+  avatarPickerCircle: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
+  avatarPickerInitial: { color: '#fff', fontSize: 30, fontWeight: '700' },
+  avatarPickerBadge: { position: 'absolute', bottom: 0, right: 0, width: 26, height: 26, borderRadius: 13, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
 
   // Modal shared
   modal: { flex: 1 },

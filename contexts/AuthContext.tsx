@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import { guestRegister, joinViaInvite } from '@/services/api';
+import { guestRegister, joinViaInvite, updateMe, uploadAvatar } from '@/services/api';
 
 // 웹은 SecureStore 미지원 → localStorage 폴백
 const storage = {
@@ -29,6 +29,7 @@ export type GuestSession = {
   role: UserRole;
   babyName: string;
   babyBirth: string;
+  avatarUrl?: string | null;
 };
 
 type AuthContextType = {
@@ -37,6 +38,8 @@ type AuthContextType = {
   createGuestSession: (data: Pick<GuestSession, 'nickname' | 'role' | 'babyName' | 'babyBirth'>) => Promise<void>;
   joinViaInviteSession: (inviteToken: string, nickname: string) => Promise<void>;
   switchAlbum: (albumId: number, babyName: string, babyBirth: string) => Promise<void>;
+  updateNickname: (name: string) => Promise<void>;
+  updateAvatar: (uri: string, mimeType: string, fileName: string) => Promise<void>;
   clearSession: () => Promise<void>;
 };
 
@@ -105,6 +108,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(newSession);
   }
 
+  async function updateNickname(name: string) {
+    if (!session) return;
+    await updateMe(session.token, name);
+    const updated = { ...session, nickname: name };
+    await storage.set(SESSION_KEY, JSON.stringify(updated));
+    setSession(updated);
+  }
+
+  async function updateAvatar(uri: string, mimeType: string, fileName: string) {
+    if (!session) return;
+    const res = await uploadAvatar(session.token, uri, mimeType, fileName);
+    const updated = { ...session, avatarUrl: res.avatar_url };
+    await storage.set(SESSION_KEY, JSON.stringify(updated));
+    setSession(updated);
+  }
+
   async function switchAlbum(albumId: number, babyName: string, babyBirth: string) {
     if (!session) return;
     const updated = { ...session, albumId, babyName, babyBirth };
@@ -118,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, isLoading, createGuestSession, joinViaInviteSession, switchAlbum, clearSession }}>
+    <AuthContext.Provider value={{ session, isLoading, createGuestSession, joinViaInviteSession, switchAlbum, updateNickname, updateAvatar, clearSession }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useState } from "react";
 import { ActivityIndicator, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -6,9 +7,19 @@ import { ActivityIndicator, SafeAreaView, ScrollView, StyleSheet, Text, View } f
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/contexts/AuthContext";
 import { useColorScheme } from "@/hooks/use-color-scheme";
-import { ApiActivity, ApiMember, ApiError, getActivity, getMembers } from "@/services/api";
+import { ApiActivity, ApiMember, ApiError, FILE_BASE, getActivity, getMembers } from "@/services/api";
 
 const AVATAR_COLORS = ['#FF6B8A', '#6B8AFF', '#6BC97A', '#FFB347', '#A78BFA', '#00CEC9'];
+
+const DISPLAY_ROLE_LABELS: Record<string, string> = {
+  mom: '엄마', dad: '아빠', grandpa: '할아버지', grandma: '할머니',
+  uncle_aunt: '외숙부모/이모·부', relative: '백부모/숙부모/고모·부',
+  baby: '아기', other: '가족', admin: '관리자', member: '멤버',
+};
+function displayRoleLabel(m: { role: string; display_role: string; is_creator: boolean }): string {
+  const label = DISPLAY_ROLE_LABELS[m.display_role] ?? DISPLAY_ROLE_LABELS[m.role] ?? '가족';
+  return m.is_creator ? `${label} (생성자)` : label;
+}
 
 function avatarColor(name: string): string {
   let h = 0;
@@ -84,7 +95,10 @@ export default function NewsScreen() {
                     <View key={m.id} style={styles.memberCard}>
                       <View style={styles.avatarWrapper}>
                         <View style={[styles.avatar, { backgroundColor: color }]}>
-                          <Text style={styles.avatarInitial}>{m.name.charAt(0)}</Text>
+                          {m.avatar_url
+                            ? <Image source={{ uri: FILE_BASE + m.avatar_url }} style={{ width: 56, height: 56, borderRadius: 28 }} />
+                            : <Text style={styles.avatarInitial}>{m.name.charAt(0)}</Text>
+                          }
                         </View>
                         {m.role === 'admin' && (
                           <View style={[styles.adminDot, { backgroundColor: colors.tint }]}>
@@ -94,7 +108,7 @@ export default function NewsScreen() {
                       </View>
                       <Text style={[styles.memberName, { color: colors.text }]} numberOfLines={1}>{m.name}</Text>
                       <Text style={[styles.memberRole, { color: colors.subtext }]}>
-                        {m.is_creator ? '관리자(생성)' : m.role === 'admin' ? '관리자' : '멤버'}
+                        {displayRoleLabel(m)}
                       </Text>
                     </View>
                   );
@@ -120,7 +134,10 @@ export default function NewsScreen() {
                     style={[styles.activityCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                   >
                     <View style={[styles.activityAvatar, { backgroundColor: color }]}>
-                      <Text style={styles.activityAvatarInitial}>{a.uploader_name.charAt(0)}</Text>
+                      {a.avatar_url
+                        ? <Image source={{ uri: FILE_BASE + a.avatar_url }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+                        : <Text style={styles.activityAvatarInitial}>{a.uploader_name.charAt(0)}</Text>
+                      }
                     </View>
                     <View style={styles.activityContent}>
                       <Text style={[styles.activityText, { color: colors.text }]}>

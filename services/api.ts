@@ -146,6 +146,7 @@ export type ApiAlbum = {
   baby_name: string;
   birth_date: string; // YYYY-MM-DD
   color: string;
+  avatar_url?: string | null;
   created_by: number;
   role: 'admin' | 'member';
 };
@@ -166,6 +167,18 @@ export function deleteAlbumApi(albumId: number, token: string) {
   return request<{ success: boolean }>(`/albums/${albumId}`, { method: 'DELETE' }, token);
 }
 
+export async function uploadAlbumAvatar(albumId: number, token: string, uri: string, mimeType: string, fileName: string) {
+  const formData = new FormData();
+  if (Platform.OS === 'web') {
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    formData.append('file', blob, fileName);
+  } else {
+    formData.append('file', { uri, type: mimeType, name: fileName } as unknown as Blob);
+  }
+  return request<{ avatar_url: string }>(`/albums/${albumId}/avatar`, { method: 'POST', body: formData }, token);
+}
+
 // ─── Members ──────────────────────────────────────────────────────────────────
 
 export type ApiMember = {
@@ -175,11 +188,13 @@ export type ApiMember = {
   display_role: string;
   joined_at: string;
   is_creator: boolean;
+  avatar_url?: string | null;
 };
 
 export type ApiActivity = {
   uploader_id: number;
   uploader_name: string;
+  avatar_url?: string | null;
   count: number;
   last_uploaded_at: string;
 };
@@ -245,6 +260,25 @@ export function createInvite(
 
 export function getInviteInfo(inviteToken: string) {
   return request<InviteInfo>(`/invite/${inviteToken}`);
+}
+
+export function updateMe(token: string, name: string) {
+  return request<{ id: number; name: string; avatar_url?: string | null }>('/users/me', {
+    method: 'PUT',
+    body: JSON.stringify({ name }),
+  }, token);
+}
+
+export async function uploadAvatar(token: string, uri: string, mimeType: string, fileName: string) {
+  const formData = new FormData();
+  if (Platform.OS === 'web') {
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    formData.append('file', blob, fileName);
+  } else {
+    formData.append('file', { uri, type: mimeType, name: fileName } as unknown as Blob);
+  }
+  return request<{ avatar_url: string }>('/users/me/avatar', { method: 'POST', body: formData }, token);
 }
 
 export function joinViaInvite(inviteToken: string, nickname: string) {
