@@ -4,7 +4,7 @@ import * as Linking from 'expo-linking';
 import { useFocusEffect } from "expo-router";
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -432,6 +432,13 @@ export default function SettingsScreen() {
     fetchMembers();
   }, [fetchAlbums, fetchMembers]));
 
+  // share 스텝에서 5초마다 멤버 갱신 (누군가 초대 수락 시 바로 반영)
+  useEffect(() => {
+    if (!inviteVisible || inviteStep !== 'share') return;
+    const timer = setInterval(fetchMembers, 5000);
+    return () => clearInterval(timer);
+  }, [inviteVisible, inviteStep, fetchMembers]);
+
   // Role change confirmation
   type PendingRoleChange = { memberId: number; memberName: string; newRole: MemberRole };
   const [pendingRoleChange, setPendingRoleChange] = useState<PendingRoleChange | null>(null);
@@ -761,7 +768,12 @@ export default function SettingsScreen() {
               </Text>
             </TouchableOpacity>
             <Text style={[styles.modalTitle, { color: colors.text }]}>멤버 초대</Text>
-            <View style={{ width: 60 }} />
+            <TouchableOpacity
+              style={{ width: 60, alignItems: 'flex-end' }}
+              onPress={() => { setInviteVisible(false); fetchMembers(); }}
+            >
+              <Text style={[styles.modalSave, { color: inviteStep === 'share' ? colors.tint : 'transparent' }]}>확인</Text>
+            </TouchableOpacity>
           </View>
 
           <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40 }}>
