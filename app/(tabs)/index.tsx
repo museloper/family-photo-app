@@ -571,6 +571,7 @@ export default function AlbumScreen() {
       {/* Photo Detail Modal */}
       <Modal visible={!!selectedPhoto} animationType="slide" onRequestClose={closeModal}>
         {selectedPhoto && currentPhoto && (
+          <>
           <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
             {/* Modal header */}
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
@@ -738,47 +739,48 @@ export default function AlbumScreen() {
               </View>
             </KeyboardAvoidingView>
           </SafeAreaView>
-        )}
-      </Modal>
 
-      {/* Visibility Picker */}
-      <Modal
-        visible={!!visibilityPickerPhoto}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setVisibilityPickerPhoto(null)}
-      >
-        <TouchableOpacity
-          style={styles.visPickerOverlay}
-          activeOpacity={1}
-          onPress={() => setVisibilityPickerPhoto(null)}
-        >
-          <View style={[styles.visPickerSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.visPickerTitle, { color: colors.subtext }]}>공개 범위 선택</Text>
-            {([
-              { key: 'public',  icon: 'globe-outline',       label: '전체 공개',  desc: '앱을 사용하는 누구나 볼 수 있어요' },
-              { key: 'family',  icon: 'people-outline',      label: '가족 공개',  desc: '앨범에 초대된 가족만 볼 수 있어요' },
-              { key: 'private', icon: 'lock-closed-outline', label: '비공개',     desc: '나만 볼 수 있어요' },
-            ] as const).map(({ key, icon, label, desc }) => {
-              const isSelected = visibilityPickerPhoto?.visibility === key;
-              return (
-                <TouchableOpacity
-                  key={key}
-                  style={[styles.visPickerRow, isSelected && { backgroundColor: colors.tint + '18' }]}
-                  onPress={() => visibilityPickerPhoto && handleChangeVisibility(visibilityPickerPhoto, key)}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name={icon} size={20} color={isSelected ? colors.tint : colors.subtext} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.visPickerLabel, { color: isSelected ? colors.tint : colors.text }]}>{label}</Text>
-                    <Text style={[styles.visPickerDesc, { color: colors.subtext }]}>{desc}</Text>
-                  </View>
-                  {isSelected && <Ionicons name="checkmark" size={18} color={colors.tint} />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </TouchableOpacity>
+          {/* Visibility Picker - Photo Detail Modal 안에 중첩해야 iOS에서 정상 동작 */}
+          <Modal
+            visible={!!visibilityPickerPhoto}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setVisibilityPickerPhoto(null)}
+          >
+            <TouchableOpacity
+              style={styles.visPickerOverlay}
+              activeOpacity={1}
+              onPress={() => setVisibilityPickerPhoto(null)}
+            >
+              <View style={[styles.visPickerSheet, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Text style={[styles.visPickerTitle, { color: colors.subtext }]}>공개 범위 선택</Text>
+                {([
+                  { key: 'public',  icon: 'globe-outline',       label: '전체 공개',  desc: '앱을 사용하는 누구나 볼 수 있어요' },
+                  { key: 'family',  icon: 'people-outline',      label: '가족 공개',  desc: '앨범에 초대된 가족만 볼 수 있어요' },
+                  { key: 'private', icon: 'lock-closed-outline', label: '비공개',     desc: '나만 볼 수 있어요' },
+                ] as const).map(({ key, icon, label, desc }) => {
+                  const isSelected = visibilityPickerPhoto?.visibility === key;
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      style={[styles.visPickerRow, isSelected && { backgroundColor: colors.tint + '18' }]}
+                      onPress={() => visibilityPickerPhoto && handleChangeVisibility(visibilityPickerPhoto, key)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name={icon} size={20} color={isSelected ? colors.tint : colors.subtext} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.visPickerLabel, { color: isSelected ? colors.tint : colors.text }]}>{label}</Text>
+                        <Text style={[styles.visPickerDesc, { color: colors.subtext }]}>{desc}</Text>
+                      </View>
+                      {isSelected && <Ionicons name="checkmark" size={18} color={colors.tint} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </TouchableOpacity>
+          </Modal>
+          </>
+        )}
       </Modal>
     </SafeAreaView>
   );
