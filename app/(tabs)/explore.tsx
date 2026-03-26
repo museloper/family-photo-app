@@ -16,7 +16,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
@@ -70,6 +70,7 @@ export default function ExploreScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const isDark = colorScheme === 'dark';
+  const insets = useSafeAreaInsets();
   const { session, clearSession } = useAuth();
 
   const [photos, setPhotos] = useState<ApiPhoto[]>([]);
@@ -239,7 +240,7 @@ export default function ExploreScreen() {
         onRequestClose={() => { setSelectedPhoto(null); setCommentInput(''); }}
       >
         {selectedPhoto && currentPhoto && (
-          <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
+          <View style={[styles.modal, { backgroundColor: colors.background, paddingTop: insets.top }]}>
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
               <View style={[styles.modalAvatar, { backgroundColor: avatarColor(selectedPhoto.uploader_name ?? '?') }]}>
                 <Text style={styles.modalAvatarInitial}>{(selectedPhoto.uploader_name ?? '?').charAt(0)}</Text>
@@ -352,7 +353,7 @@ export default function ExploreScreen() {
                 </TouchableOpacity>
               </View>
             </KeyboardAvoidingView>
-          </SafeAreaView>
+          </View>
         )}
       </Modal>
     </SafeAreaView>

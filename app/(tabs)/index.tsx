@@ -17,7 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors } from '@/constants/theme';
 import { useAuth } from '@/contexts/AuthContext';
@@ -103,6 +103,7 @@ export default function AlbumScreen() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const isDark = colorScheme === 'dark';
+  const insets = useSafeAreaInsets();
 
   const { session, clearSession, switchAlbum } = useAuth();
 
@@ -572,7 +573,7 @@ export default function AlbumScreen() {
       <Modal visible={!!selectedPhoto} animationType="slide" onRequestClose={closeModal}>
         {selectedPhoto && currentPhoto && (
           <>
-          <SafeAreaView style={[styles.modal, { backgroundColor: colors.background }]}>
+          <View style={[styles.modal, { backgroundColor: colors.background, paddingTop: insets.top }]}>
             {/* Modal header */}
             <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
               <View style={[styles.modalAvatar, { backgroundColor: getAvatarColor(selectedPhoto.uploadedBy) }]}>
@@ -738,7 +739,7 @@ export default function AlbumScreen() {
                 </TouchableOpacity>
               </View>
             </KeyboardAvoidingView>
-          </SafeAreaView>
+          </View>
 
           {/* Visibility Picker - Photo Detail Modal 안에 중첩해야 iOS에서 정상 동작 */}
           <Modal

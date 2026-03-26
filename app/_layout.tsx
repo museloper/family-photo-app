@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AlbumProvider } from '@/contexts/AlbumContext';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -15,6 +16,7 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
+    <SafeAreaProvider>
     <AuthProvider>
       <AlbumProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
@@ -30,5 +32,6 @@ export default function RootLayout() {
         </ThemeProvider>
       </AlbumProvider>
     </AuthProvider>
+    </SafeAreaProvider>
   );
 }
