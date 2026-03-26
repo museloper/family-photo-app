@@ -2,7 +2,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useState } from "react";
-import { ActivityIndicator, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors } from "@/constants/theme";
 import { useAuth } from "@/contexts/AuthContext";
