@@ -4,12 +4,14 @@ import { Platform } from 'react-native';
 // 플랫폼별 API 베이스 URL
 const API_BASE = Platform.select({
   android: 'http://10.0.2.2:3000/api',
+  ios: 'http://192.168.0.32:3000/api',
   default: 'http://localhost:3000/api',
 });
 
 // 정적 파일 베이스 URL (/files/... 경로를 절대 URL로 변환할 때 사용)
 export const FILE_BASE = Platform.select({
   android: 'http://10.0.2.2:3000',
+  ios: 'http://192.168.0.32:3000',
   default: 'http://localhost:3000',
 }) as string;
 
