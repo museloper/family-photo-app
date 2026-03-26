@@ -212,7 +212,7 @@ function WebAddScreen() {
 // ─── Native gallery screen ────────────────────────────────────────────────────
 
 export default function AddScreen() {
-  if (Platform.OS === 'web') return <WebAddScreen />;
+  if (Platform.OS === 'web' || Platform.OS === 'android') return <WebAddScreen />;
   return <NativeAddScreen />;
 }
 
@@ -221,7 +221,9 @@ function NativeAddScreen() {
   const colors = Colors[colorScheme];
   const { session, clearSession } = useAuth();
 
-  const [permission, requestPermission] = MediaLibrary.usePermissions();
+  const [permission, requestPermission] = MediaLibrary.usePermissions({
+    granularPermissions: ['photo', 'video'],
+  });
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
   const [loadingGallery, setLoadingGallery] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
