@@ -292,7 +292,13 @@ function NativeAddScreen() {
         const mimeType = item.isVideo ? 'video/mp4' : 'image/jpeg';
         const ext = item.isVideo ? 'mp4' : 'jpg';
         const fileName = `${Date.now()}_${item.id}.${ext}`;
-        await uploadPhoto(session.albumId, session.token, item.uri, mimeType, fileName, item.takenAt.getTime());
+        // ph-upload:// URI는 iCloud 미다운로드 사진 — localUri로 강제 다운로드
+        let uri = item.uri;
+        if (uri.startsWith('ph-upload://') || !uri.startsWith('file://')) {
+          const info = await MediaLibrary.getAssetInfoAsync(item.id);
+          uri = info.localUri ?? uri;
+        }
+        await uploadPhoto(session.albumId, session.token, uri, mimeType, fileName, item.takenAt.getTime());
         successCount++;
       } catch (e) {
         console.error('업로드 실패', e);
